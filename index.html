@@ -1,28 +1,28 @@
-<!DOCTYPE html>
-<html lang="de">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Infinite Growth</title>
-  <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css">
+<!DOCTYPE html>                      <!-- Teilt dem Browser mit: das ist ein modernes HTML5-Dokument -->
+<html lang="de">                     <!-- Startet das HTML-Dokument, Sprache auf Deutsch gesetzt -->
+<head>                               <!-- Kopfbereich: unsichtbare Einstellungen der Seite -->
+  <meta charset="UTF-8">             <!-- Zeichenkodierung: erlaubt Umlaute und Sonderzeichen -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"> <!-- Macht die Seite auf Mobilgeräten korrekt skaliert -->
+  <title>Infinite Growth</title>     <!-- Text der im Browser-Tab angezeigt wird -->
+  <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&display=swap" rel="stylesheet"> <!-- Lädt die Schriftart "Space Mono" von Google Fonts -->
+  <link rel="stylesheet" href="style.css"> <!-- Bindet die externe CSS-Datei ein (Styling) -->
 </head>
-<body>
+<body>                               <!-- Sichtbarer Inhalt der Seite beginnt hier -->
 
-<canvas id="canvas"></canvas>
+<canvas id="canvas"></canvas>        <!-- Die Zeichenfläche – hier passiert die gesamte Animation -->
 
-<div id="ui">
-  <div id="label">
-    <div class="sub">Interface Design</div>
-    <h1>Infinite Growth<span class="dot"></span></h1>
+<div id="ui">                        <!-- Container für alle UI-Texte, liegt über dem Canvas -->
+  <div id="label">                   <!-- Titelblock oben links -->
+    <div class="sub">Interface Design</div>          <!-- Kleiner Untertitel über dem Haupttitel -->
+    <h1>Infinite Growth<span class="dot"></span></h1> <!-- Haupttitel + grüner Akzentpunkt -->
   </div>
-  <div id="corner">&#8734;</div>
-  <div id="hint">— set points, grow connections —</div>
-  <div id="hint2">double-click to clear</div>
-  <div id="stats"></div>
+  <div id="corner">&#8734;</div>     <!-- Unendlichkeitszeichen (∞) oben rechts -->
+  <div id="hint">— set points, grow connections —</div> <!-- Erster Hinweistext für den User -->
+  <div id="hint2">double-click to clear</div>           <!-- Zweiter Hinweis, erscheint nach erstem Klick -->
+  <div id="stats"></div>             <!-- Statistikanzeige – wird per JavaScript befüllt -->
 </div>
 
-<script src="script.js"></script>
+<script src="script.js"></script>    <!-- Bindet die externe JavaScript-Datei ein (Logik & Animation) -->
 
-</body>
-</html>
+</body>                              <!-- Ende des sichtbaren Inhalts -->
+</html>                              <!-- Ende des HTML-Dokuments -->

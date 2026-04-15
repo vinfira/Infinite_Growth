@@ -1,52 +1,85 @@
-* { margin:0; padding:0; box-sizing:border-box; }
-body { background:#000; overflow:hidden; cursor:none; }
-canvas { display:block; position:fixed; top:0; left:0; }
+/* Setzt bei ALLEN Elementen (*) Innen- und Außenabstände auf 0,
+   und berechnet Größen inklusive Rahmen (box-sizing) */
+   * { margin:0; padding:0; box-sizing:border-box; }
 
-#ui {
-  position:fixed; top:0; left:0; width:100%; height:100%;
-  pointer-events:none; z-index:10;
-  font-family:'Space Mono', monospace;
-}
-
-#label { position:absolute; top:42px; left:48px; }
-#label .sub {
-  font-size:8.5px; color:rgba(255,255,255,0.22);
-  letter-spacing:0.6em; text-transform:uppercase;
-}
-#label h1 {
-  font-size:27px; font-weight:700; color:#fff;
-  letter-spacing:0.1em; text-transform:uppercase;
-  margin-top:7px; line-height:1;
-}
-#label h1 .dot {
-  display:inline-block; width:7px; height:7px;
-  background:#98FF6E; border-radius:50%;
-  margin-left:5px; vertical-align:middle; top:-3px; position:relative;
-  animation:pulse 2.5s ease-in-out infinite;
-}
-@keyframes pulse {
-  0%,100% { box-shadow:0 0 6px #98FF6E; }
-  50%      { box-shadow:0 0 16px #98FF6E, 0 0 30px #98FF6E44; }
-}
-
-#corner { position:absolute; top:44px; right:48px; font-size:18px; color:rgba(255,255,255,0.08); }
-
-#hint {
-  position:absolute; bottom:44px; left:50%; transform:translateX(-50%);
-  font-size:8.5px; letter-spacing:0.5em; color:rgba(255,255,255,0.28);
-  text-transform:uppercase; transition:opacity 1.8s; white-space:nowrap;
-}
-#hint.fade { opacity:0; }
-
-#hint2 {
-  position:absolute; bottom:44px; left:50%; transform:translateX(-50%);
-  font-size:8.5px; letter-spacing:0.4em; color:rgba(255,255,255,0.1);
-  text-transform:uppercase; opacity:0; transition:opacity 1.2s; white-space:nowrap;
-}
-#hint2.show { opacity:1; }
-
-#stats {
-  position:absolute; bottom:44px; right:48px;
-  font-size:8.5px; letter-spacing:0.3em; color:rgba(255,255,255,0.14);
-  text-transform:uppercase; text-align:right;
-}
+   /* Seitenhintergrund schwarz, kein Scrollbalken, Standard-Cursor versteckt */
+   body { background:#000; overflow:hidden; cursor:none; }
+   
+   /* Canvas fest oben links positioniert, füllt den ganzen Bildschirm */
+   canvas { display:block; position:fixed; top:0; left:0; }
+   
+   /* UI-Container liegt über dem Canvas (z-index:10), lässt aber Klicks durch (pointer-events:none) */
+   #ui {
+     position:fixed; top:0; left:0;    /* Fest oben links verankert */
+     width:100%; height:100%;           /* Füllt das gesamte Fenster */
+     pointer-events:none;               /* Klicks gehen durch die UI hindurch auf den Canvas */
+     z-index:10;                        /* Liegt vor dem Canvas (höherer Wert = weiter vorne) */
+     font-family:'Space Mono', monospace; /* Schriftart für alle UI-Texte */
+   }
+   
+   /* Titelblock: fest positioniert oben links */
+   #label { position:absolute; top:42px; left:48px; }
+   
+   /* Kleiner Untertitel "Interface Design" über dem Haupttitel */
+   #label .sub {
+     font-size:8.5px;                   /* Sehr kleine Schriftgröße */
+     color:rgba(255,255,255,0.22);      /* Weiß mit 22% Deckkraft (sehr blass) */
+     letter-spacing:0.6em;             /* Großer Abstand zwischen den Buchstaben */
+     text-transform:uppercase;         /* Automatisch in Großbuchstaben */
+   }
+   
+   /* Haupttitel "Infinite Growth" */
+   #label h1 {
+     font-size:27px; font-weight:700; color:#fff; /* Groß, fett, weiß */
+     letter-spacing:0.1em; text-transform:uppercase; /* Leicht gesperrt, Großbuchstaben */
+     margin-top:7px; line-height:1;     /* Kleiner Abstand nach oben, enger Zeilenabstand */
+   }
+   
+   /* Der grüne Akzentpunkt direkt hinter dem Titel */
+   #label h1 .dot {
+     display:inline-block;              /* Damit width und height funktionieren */
+     width:7px; height:7px;             /* 7x7 Pixel groß */
+     background:#98FF6E;                /* Akzentfarbe: helles Grün */
+     border-radius:50%;                 /* Macht das Quadrat zum Kreis */
+     margin-left:5px;                   /* Kleiner Abstand zum letzten Buchstaben */
+     vertical-align:middle;             /* Vertikal zentriert im Text */
+     top:-3px; position:relative;       /* Leicht nach oben verschoben */
+     animation:pulse 2.5s ease-in-out infinite; /* Startet die Puls-Animation, läuft endlos */
+   }
+   
+   /* Definition der Puls-Animation: grüner Schein pulsiert */
+   @keyframes pulse {
+     0%,100% { box-shadow:0 0 6px #98FF6E; }              /* Anfang & Ende: kleiner Schein */
+     50%      { box-shadow:0 0 16px #98FF6E, 0 0 30px #98FF6E44; } /* Mitte: größerer Schein */
+   }
+   
+   /* Unendlichkeitszeichen oben rechts, sehr blass */
+   #corner { position:absolute; top:44px; right:48px; font-size:18px; color:rgba(255,255,255,0.08); }
+   
+   /* Erster Hinweistext: zentriert am unteren Rand */
+   #hint {
+     position:absolute; bottom:44px; left:50%; /* Unten, horizontal über left:50% zentriert */
+     transform:translateX(-50%);        /* Korrigiert die Zentrierung um die halbe eigene Breite */
+     font-size:8.5px; letter-spacing:0.5em; color:rgba(255,255,255,0.28); /* Klein, gesperrt, halbtransparent */
+     text-transform:uppercase; transition:opacity 1.8s; white-space:nowrap; /* Uppercase, weiches Ausblenden, kein Zeilenumbruch */
+   }
+   
+   /* Wenn JavaScript die Klasse "fade" setzt, wird der Hinweis unsichtbar */
+   #hint.fade { opacity:0; }
+   
+   /* Zweiter Hinweistext (Doppelklick zum Löschen): startet unsichtbar */
+   #hint2 {
+     position:absolute; bottom:44px; left:50%; transform:translateX(-50%); /* Gleiche Position wie #hint */
+     font-size:8.5px; letter-spacing:0.4em; color:rgba(255,255,255,0.1);   /* Noch dezenter als #hint */
+     text-transform:uppercase; opacity:0; transition:opacity 1.2s; white-space:nowrap; /* Startet unsichtbar */
+   }
+   
+   /* Wenn JavaScript die Klasse "show" setzt, wird dieser Hinweis sichtbar */
+   #hint2.show { opacity:1; }
+   
+   /* Statistikanzeige unten rechts (Anzahl Nodes und Pflanzen) */
+   #stats {
+     position:absolute; bottom:44px; right:48px; /* Unten rechts */
+     font-size:8.5px; letter-spacing:0.3em; color:rgba(255,255,255,0.14); /* Klein und dezent */
+     text-transform:uppercase; text-align:right; /* Großbuchstaben, rechtsbündig */
+   }
