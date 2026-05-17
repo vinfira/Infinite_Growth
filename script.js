@@ -6,10 +6,68 @@ const hint2  = document.getElementById('hint2');  // Referenz auf den zweiten Hi
 const stats  = document.getElementById('stats');  // Referenz auf die Statistikanzeige
 
 /* ── Globale Konstanten ── */
-const ACCENT     = '#98FF6E';        // Akzentfarbe als Hex-Wert (für einfache Farbangaben)
-const ACCENT_RGB = '152,255,110';    // Akzentfarbe als RGB-Zahlen (für rgba() mit Transparenz)
 const CONNECT_R  = 190;             // Maximale Distanz in Pixeln, bei der zwei Nodes sich verbinden
 const NODE_R     = 3.2;             // Radius des weißen Punktes eines Nodes
+
+// ════════════════════════════════════════════
+// JAHRESZEITEN-SYSTEM
+// Vier Jahreszeiten wechseln automatisch alle
+// 45 Sekunden. Akzentfarbe und Windstärke
+// werden sanft interpoliert (kein abrupter Wechsel).
+// ════════════════════════════════════════════
+
+const SEASONS = [
+  { name: 'SPRING', r:152, g:255, b:110, windMult:1.0, butterflyMult:1.0 }, // Grün  – ruhig, viele Schmetterlinge
+  { name: 'SUMMER', r:255, g:230, b: 80, windMult:1.4, butterflyMult:1.8 }, // Gelb  – windig, viele Schmetterlinge
+  { name: 'AUTUMN', r:255, g:130, b: 40, windMult:1.8, butterflyMult:0.3 }, // Orange– stark windig, kaum Schmetterlinge
+  { name: 'WINTER', r:140, g:200, b:255, windMult:0.5, butterflyMult:0.0 }, // Eisblau – ruhig, keine Schmetterlinge
+];
+
+const SEASON_DURATION = 45 * 60;    // Dauer einer Jahreszeit in Frames (45s × 60fps)
+const TRANSITION_DUR  = 5  * 60;    // Übergangszeit in Frames (5 Sekunden sanft überblenden)
+
+let seasonIndex    = 0;             // Aktuelle Jahreszeit (0=Frühling … 3=Winter)
+let seasonFrame    = 0;             // Wie viele Frames die aktuelle Jahreszeit schon läuft
+let currentR = 152, currentG = 255, currentB = 110; // Aktuelle interpolierte RGB-Farbe (startet Frühling)
+
+// Gibt den aktuellen Akzent-Hex zurück (wird von Pflanzen/Partikeln benutzt)
+function getAccent()    { return `rgb(${Math.round(currentR)},${Math.round(currentG)},${Math.round(currentB)})`; }
+// Gibt die RGB-Zahlen als String zurück (für rgba()-Aufrufe)
+function getAccentRGB() { return `${Math.round(currentR)},${Math.round(currentG)},${Math.round(currentB)}`; }
+
+// UI-Element für die Jahreszeiten-Anzeige (oben rechts, neben ∞)
+const seasonEl = document.getElementById('season-label');
+
+function updateSeason() {
+  seasonFrame++;                    // Frame-Zähler hochzählen
+
+  if (seasonFrame >= SEASON_DURATION) { // Jahreszeit abgelaufen?
+    seasonFrame  = 0;               // Zurücksetzen
+    seasonIndex  = (seasonIndex + 1) % 4; // Nächste Jahreszeit (0→1→2→3→0)
+    if (seasonEl) seasonEl.textContent = SEASONS[seasonIndex].name; // UI aktualisieren
+  }
+
+  // Sanfte Farbinterpolation: in den letzten TRANSITION_DUR Frames zur nächsten Farbe überblenden
+  const next   = SEASONS[(seasonIndex + 1) % 4]; // Nächste Jahreszeit
+  const curr   = SEASONS[seasonIndex];            // Aktuelle Jahreszeit
+  const t      = Math.max(0, (seasonFrame - (SEASON_DURATION - TRANSITION_DUR)) / TRANSITION_DUR); // 0→1 im Übergang
+  currentR     = curr.r + (next.r - curr.r) * t; // Rot interpolieren
+  currentG     = curr.g + (next.g - curr.g) * t; // Grün interpolieren
+  currentB     = curr.b + (next.b - curr.b) * t; // Blau interpolieren
+}
+
+// Gibt den aktuellen Windmultiplikator der Jahreszeit zurück
+function getSeasonWindMult() {
+  const curr = SEASONS[seasonIndex];
+  const next = SEASONS[(seasonIndex + 1) % 4];
+  const t    = Math.max(0, (seasonFrame - (SEASON_DURATION - TRANSITION_DUR)) / TRANSITION_DUR);
+  return curr.windMult + (next.windMult - curr.windMult) * t; // Auch Windstärke sanft interpolieren
+}
+
+// Gibt zurück wie viele Schmetterlinge die aktuelle Jahreszeit erlaubt (0 im Winter)
+function getSeasonButterflyMult() {
+  return SEASONS[seasonIndex].butterflyMult;
+}
 
 /* ── Canvas-Größe auf Fenster setzen ── */
 let W = canvas.width  = window.innerWidth;  // Breite: Canvas = Fensterbreite, auch in W gespeichert
@@ -37,10 +95,12 @@ let windSway = 0;                   // Aktueller Neigungswinkel aller Pflanzen (
 
 function updateWind() {
   windTime += 0.007;                // Zeit voranschreiten (Geschwindigkeit des Winds)
+  const m = getSeasonWindMult();    // Windstärke je nach Jahreszeit (Herbst weht stärker)
   // Drei Sinuswellen mit verschiedenen Frequenzen überlagern → kein mechanisches Hin-und-her
-  windSway = Math.sin(windTime * 0.65) * 0.055  // Langsame Hauptbewegung
-           + Math.sin(windTime * 1.4 ) * 0.022  // Mittlere Böe
-           + Math.sin(windTime * 2.8 ) * 0.010; // Kleines schnelles Zittern
+  windSway = (Math.sin(windTime * 0.65) * 0.055   // Langsame Hauptbewegung
+           +  Math.sin(windTime * 1.4 ) * 0.022   // Mittlere Böe
+           +  Math.sin(windTime * 2.8 ) * 0.010)  // Kleines schnelles Zittern
+           * m;                     // Mit Jahreszeitenmultiplikator skalieren
 }
 
 
@@ -188,13 +248,29 @@ class TreeSeg {                      // Ein einzelnes Ast-Segment des Baums
 
   update() {                         // Ast wachsen lassen und Kinder aktualisieren
     if (!this.done) {
-      this.currentLen = Math.min(this.targetLen, this.currentLen+this.speed); // Länge erhöhen
+      // Im Frühling/Sommer schneller wachsen, im Herbst/Winter langsamer
+      const growMult = seasonIndex < 2 ? 1.0 + seasonIndex * 0.3 : 0.2;
+      this.currentLen = Math.min(this.targetLen, this.currentLen + this.speed * growMult);
       if (this.currentLen>=this.targetLen) {
         this.done=true;              // Ast hat Ziellänge erreicht
         if (!this.isLeaf) this.spawn(); // Wenn kein Blatt: Unteräste erzeugen
       }
     } else if (this.isLeaf) {
-      this.leafProgress = Math.min(1, this.leafProgress+0.025); // Blatt langsam einblenden
+      if (seasonIndex < 2) {
+        // Frühling/Sommer: Blätter wachsen langsam ein
+        this.leafProgress = Math.min(1, this.leafProgress + 0.025);
+      } else {
+        // Herbst/Winter: Blätter fallen langsam ab
+        const wiltSpeed = seasonIndex === 2 ? 0.0015 : 0.003; // Herbst langsam, Winter schneller
+        if (this.leafProgress > 0) {
+          this.leafProgress = Math.max(0, this.leafProgress - wiltSpeed);
+          // Wenn Blatt fast weg: ein fallendes Blatt erzeugen
+          if (this.leafProgress < 0.15 && this.leafProgress > 0 && Math.random() < 0.008) {
+            fallingLeaves.push(new FallingLeaf(this.tipX, this.tipY, this.leafType, this.leafSize));
+            this.leafProgress = 0;  // Blatt sofort entfernen nach dem Ablösen
+          }
+        }
+      }
     }
     this.children.forEach(c=>c.update()); // Alle Unteräste ebenfalls aktualisieren
   }
@@ -243,12 +319,12 @@ class TreeSeg {                      // Ein einzelnes Ast-Segment des Baums
     // Blatt zeichnen (nur wenn fertig gewachsen und Fortschritt > 0)
     if (this.done && this.isLeaf && this.leafProgress>0) {
       const s   = this.leafSize * this.leafProgress; // Aktuelle Blattgröße (wächst mit Fortschritt)
-      const col = this.leafAccent ? ACCENT : 'rgba(255,255,255,0.82)'; // Grün oder Weiß
+      const col = this.leafAccent ? getAccent() : 'rgba(255,255,255,0.82)'; // Grün oder Weiß
       ctx.save();
       ctx.translate(this.tipX, this.tipY); // Koordinatensystem an Blattspitze verschieben
       ctx.rotate(this.angle);              // Blatt in Wachstumsrichtung drehen
       ctx.fillStyle=col;
-      if (this.leafAccent){ctx.shadowColor=ACCENT;ctx.shadowBlur=13;} // Grüner Leuchteffekt
+      if (this.leafAccent){ctx.shadowColor=getAccent();ctx.shadowBlur=13;} // Grüner Leuchteffekt
       switch(this.leafType) {
         case 'triangle':                   // Dreieck-Blatt
           ctx.beginPath();
@@ -356,11 +432,11 @@ class FlowerPlant {
   drawFlowerHead(cx,cy,size,petalCount,petalProgress,accent,scale=1) { // Zeichnet einen Blütenkopf
     if (petalProgress<=0) return;    // Noch nicht sichtbar → abbrechen
     const s  =size*petalProgress*scale; // Aktuelle Größe skaliert mit Fortschritt
-    const col=accent?ACCENT:'rgba(255,255,255,0.84)'; // Grün oder Weiß
+    const col=accent?getAccent():'rgba(255,255,255,0.84)'; // Grün oder Weiß
     ctx.save();
     ctx.translate(cx,cy);            // Koordinatensystem zur Blütenmitte verschieben
     ctx.fillStyle=col;
-    if (accent){ctx.shadowColor=ACCENT;ctx.shadowBlur=14;} // Grüner Schein
+    if (accent){ctx.shadowColor=getAccent();ctx.shadowBlur=14;} // Grüner Schein
     else {ctx.shadowColor='rgba(255,255,255,0.2)';ctx.shadowBlur=5;} // Weißer Schein
     for (let i=0;i<petalCount;i++) { // Jedes Blütenblatt einzeln zeichnen
       const a=(i/petalCount)*Math.PI*2; // Winkel gleichmäßig um den Kreis verteilt
@@ -370,8 +446,8 @@ class FlowerPlant {
       ctx.fill();
       ctx.restore();
     }
-    ctx.fillStyle=accent?'rgba(255,255,255,0.95)':ACCENT; // Blütenzentrum in Kontrastfarbe
-    ctx.shadowColor=ACCENT; ctx.shadowBlur=10;
+    ctx.fillStyle=accent?'rgba(255,255,255,0.95)':getAccent(); // Blütenzentrum in Kontrastfarbe
+    ctx.shadowColor=getAccent(); ctx.shadowBlur=10;
     ctx.beginPath(); ctx.arc(0,0,s*0.48,0,Math.PI*2); ctx.fill(); // Blütenzentrum als Kreis
     ctx.restore();
   }
@@ -464,12 +540,12 @@ class GrassPlant {
       ctx.beginPath(); ctx.moveTo(this.ox,this.oy); ctx.lineTo(tx,ty); ctx.stroke(); // Halm zeichnen
       if (b.done&&b.tipProgress>0) { // Dreieck-Spitze zeichnen wenn Halm fertig
         const s  =2.5*b.tipProgress; // Größe wächst mit Fortschritt
-        const col=b.accent?ACCENT:`rgba(255,255,255,${b.alpha})`; // Grün oder Halmfarbe
+        const col=b.accent?getAccent():`rgba(255,255,255,${b.alpha})`; // Grün oder Halmfarbe
         ctx.save();
         ctx.translate(tx,ty);        // Zur Halmspitze verschieben
         ctx.rotate(b.angle + bladeSway); // In Halmrichtung + Windneigung drehen
         ctx.fillStyle=col;
-        if (b.accent){ctx.shadowColor=ACCENT;ctx.shadowBlur=10;} // Grüner Schein
+        if (b.accent){ctx.shadowColor=getAccent();ctx.shadowBlur=10;} // Grüner Schein
         ctx.beginPath();
         ctx.moveTo(0,-s*2);          // Dreieckspitze oben
         ctx.lineTo(-s*0.7,s);        // Unten links
@@ -561,9 +637,9 @@ class MushroomPlant {
     if (capProgress<=0) return;      // Keine Kappe wenn noch nicht gestartet
     const cy=oy-stemH;               // Y-Position der Kappenunterseite
     const r=capR*capProgress;        // Aktuelle Kappengröße
-    const col=accent?ACCENT:'rgba(255,255,255,0.85)';
+    const col=accent?getAccent():'rgba(255,255,255,0.85)';
     ctx.fillStyle=col;
-    if (accent){ctx.shadowColor=ACCENT;ctx.shadowBlur=14;}
+    if (accent){ctx.shadowColor=getAccent();ctx.shadowBlur=14;}
     ctx.beginPath();
     ctx.arc(ox,cy,r,Math.PI,0);      // Halbkreis von links (π) nach rechts (0) = Pilzkappe
     ctx.closePath(); ctx.fill();     // Halbkreis schließen und füllen
@@ -649,9 +725,9 @@ class DandelionPlant {
     ctx.strokeStyle='rgba(255,255,255,0.5)'; ctx.lineWidth=0.9; ctx.lineCap='round';
     ctx.beginPath(); ctx.moveTo(this.ox,this.oy); ctx.lineTo(curTipX,curTipY); ctx.stroke(); // Stiel zeichnen
     if (this.rayProgress>0) {
-      const col=this.accent?ACCENT:'rgba(255,255,255,0.78)';
+      const col=this.accent?getAccent():'rgba(255,255,255,0.78)';
       ctx.strokeStyle=col; ctx.lineWidth=0.7;
-      if (this.accent){ctx.shadowColor=ACCENT;ctx.shadowBlur=10;}
+      if (this.accent){ctx.shadowColor=getAccent();ctx.shadowBlur=10;}
       for (let i=0;i<this.rayCount;i++) { // Alle Strahlen gleichmäßig im Kreis verteilen
         const a=(i/this.rayCount)*Math.PI*2; // Winkel dieses Strahls
         const rl=this.rayLen*this.rayProgress; // Aktuelle Strahlenlänge
@@ -661,8 +737,8 @@ class DandelionPlant {
         ctx.fillStyle=col;
         ctx.beginPath(); ctx.arc(ex,ey,1.3*this.rayProgress,0,Math.PI*2); ctx.fill(); // Punkt am Strahlenende
       }
-      ctx.fillStyle=this.accent?'rgba(255,255,255,0.9)':ACCENT; // Mittelpunkt in Kontrastfarbe
-      ctx.shadowColor=ACCENT; ctx.shadowBlur=8;
+      ctx.fillStyle=this.accent?'rgba(255,255,255,0.9)':getAccent(); // Mittelpunkt in Kontrastfarbe
+      ctx.shadowColor=getAccent(); ctx.shadowBlur=8;
       ctx.beginPath(); ctx.arc(this.tipX,this.tipY,2.5*this.rayProgress,0,Math.PI*2); ctx.fill(); // Mittelpunkt zeichnen
     }
     ctx.restore();
@@ -730,7 +806,7 @@ class Particle {
   draw() {
     if (this.alpha<=0) return;         // Unsichtbare Partikel nicht zeichnen
     const col=this.accent
-      ?`rgba(${ACCENT_RGB},${this.alpha})` // Grüner Partikel
+      ?`rgba(${getAccentRGB()},${this.alpha})` // Grüner Partikel
       :`rgba(255,255,255,${this.alpha})`;  // Weißer Partikel
     ctx.fillStyle=col;
     ctx.beginPath(); ctx.arc(this.x,this.y,this.size,0,Math.PI*2); ctx.fill();
@@ -902,7 +978,66 @@ function drawRipples() {
 
 
 // ════════════════════════════════════════════
-// SCHMETTERLING (BUTTERFLY)
+// FALLENDES BLATT (FallingLeaf)
+// Erscheint im Herbst und Winter wenn Blätter
+// von den Bäumen fallen. Dreht sich langsam,
+// fällt mit leichtem Schwung nach unten.
+// ════════════════════════════════════════════
+
+class FallingLeaf {
+  constructor(x, y, leafType, size) {
+    this.x     = x;  this.y = y;        // Startposition (an der Blattspitze)
+    this.leafType = leafType;           // Dieselbe Form wie das Original-Blatt
+    this.size  = size * 0.8;            // Etwas kleiner als das Original
+    this.vx    = (Math.random()-0.5) * 1.2 + windSway * 18; // Wind beeinflusst Flugrichtung
+    this.vy    = 0.4 + Math.random() * 0.6;                 // Fallgeschwindigkeit nach unten
+    this.rot   = Math.random() * Math.PI * 2;               // Startrotation zufällig
+    this.rotV  = (Math.random()-0.5) * 0.06;                // Rotationsgeschwindigkeit
+    this.alpha = 0.7 + Math.random() * 0.3;                 // Starttransparenz
+    this.decay = 0.004 + Math.random() * 0.004;             // Wie schnell das Blatt verblasst
+    this.wobble= Math.random() * Math.PI * 2;               // Phase für seitliches Schaukeln
+  }
+
+  update() {
+    this.wobble += 0.04;                         // Schaukel-Phase voranschreiten
+    this.vx     = this.vx * 0.99 + Math.sin(this.wobble) * 0.08 + windSway * 0.4; // Seitliches Schaukeln + Wind
+    this.vy     = Math.min(2.5, this.vy + 0.015);// Schwerkraft: wird langsam schneller
+    this.x     += this.vx;                       // Position aktualisieren
+    this.y     += this.vy;
+    this.rot   += this.rotV;                     // Blatt dreht sich
+    this.alpha -= this.decay;                    // Verblassen
+  }
+
+  draw() {
+    if (this.alpha <= 0) return;
+    const s   = this.size * Math.min(1, this.alpha * 3); // Schrumpft leicht am Ende
+    // Herbst-Akzentfarbe (Orange) oder blasses Weiß je nach Saison
+    const col = seasonIndex === 2
+      ? `rgba(${Math.round(currentR)},${Math.round(currentG)},${Math.round(currentB)},${this.alpha * 0.8})`
+      : `rgba(255,255,255,${this.alpha * 0.5})`;
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    ctx.rotate(this.rot);
+    ctx.fillStyle = col;
+    switch(this.leafType) {
+      case 'triangle':
+        ctx.beginPath(); ctx.moveTo(0,-s*1.9); ctx.lineTo(-s*0.9,s*0.8); ctx.lineTo(s*0.9,s*0.8);
+        ctx.closePath(); ctx.fill(); break;
+      case 'circle':
+        ctx.beginPath(); ctx.arc(0,0,s,0,Math.PI*2); ctx.fill(); break;
+      case 'diamond':
+        ctx.beginPath(); ctx.moveTo(0,-s*1.8); ctx.lineTo(s*0.85,0); ctx.lineTo(0,s*1.8); ctx.lineTo(-s*0.85,0);
+        ctx.closePath(); ctx.fill(); break;
+      default:                                   // dots → einfacher Kreis beim Fallen
+        ctx.beginPath(); ctx.arc(0,0,s*0.7,0,Math.PI*2); ctx.fill(); break;
+    }
+    ctx.restore();
+  }
+
+  get dead() { return this.alpha <= 0 || this.y > H + 20; } // Tot wenn unsichtbar oder außerhalb
+}
+
+let fallingLeaves = [];             // Liste aller aktiven fallenden Blätter
 // Kleine geometrische Figur aus zwei Dreiecken.
 // Fliegt autonom zwischen Blattspitzen hin und
 // her. Flügel flattern durch eine sin-Animation.
@@ -987,14 +1122,14 @@ class Butterfly {
     if (this.dead || this.alpha <= 0) return;
     const s    = this.size;
     const flap = Math.sin(this.flutter) * 0.8; // Flügelschlag: -0.8 bis +0.8 (Öffnungsgrad)
-    const col  = this.accent ? ACCENT : 'rgba(255,255,255,0.9)';
+    const col  = this.accent ? getAccent() : 'rgba(255,255,255,0.9)';
 
     ctx.save();
     ctx.globalAlpha = this.alpha;
     ctx.translate(this.x, this.y);  // Koordinatensystem zum Schmetterling verschieben
     ctx.rotate(this.angle + Math.PI/2); // In Flugrichtung drehen (+90° wegen Flügel-Ausrichtung)
     ctx.fillStyle = col;
-    if (this.accent) { ctx.shadowColor = ACCENT; ctx.shadowBlur = 8; }
+    if (this.accent) { ctx.shadowColor = getAccent(); ctx.shadowBlur = 8; }
     else             { ctx.shadowColor = 'rgba(255,255,255,0.3)'; ctx.shadowBlur = 4; }
 
     // Linker Flügel: Dreieck, kippt nach links mit flap
@@ -1018,7 +1153,7 @@ class Butterfly {
     ctx.restore();
 
     // Körper: kleiner länglicher Kreis in der Mitte
-    ctx.fillStyle = this.accent ? 'rgba(255,255,255,0.9)' : `rgba(${ACCENT_RGB},0.7)`;
+    ctx.fillStyle = this.accent ? 'rgba(255,255,255,0.9)' : `rgba(${getAccentRGB()},0.7)`;
     ctx.beginPath();
     ctx.ellipse(0, 0, s*0.18, s*0.55, 0, 0, Math.PI*2); // Schmaler Körper
     ctx.fill();
@@ -1040,10 +1175,13 @@ function spawnButterfly(tips) {
 
 // Aktualisiert die Schmetterlingspopulation: zu wenige → neue spawnen, zu viele → älteste entfernen
 function manageButterflies(tips) {
-  const MAX = Math.min(6, Math.floor(tips.length / 2)); // Max. 6, aber nie mehr als halbe Spitzenanzahl
-  butterflies = butterflies.filter(b => !b.dead);       // Tote entfernen
-  if (tips.length >= 2 && butterflies.length < MAX && Math.random() < 0.008) {
-    spawnButterfly(tips);           // Zufällig neuen Schmetterling erzeugen (0.8% Chance pro Frame)
+  const mult = getSeasonButterflyMult();                         // 0 im Winter, 1.8 im Sommer
+  const MAX  = Math.min(6, Math.floor(tips.length / 2)) * mult; // Saisonale Höchstzahl
+  butterflies = butterflies.filter(b => !b.dead);
+  // Im Winter alle sanft entfernen
+  if (mult === 0) { butterflies.forEach(b => b.fadeOut()); }
+  else if (tips.length >= 2 && butterflies.length < MAX && Math.random() < 0.008 * mult) {
+    spawnButterfly(tips);           // Häufiger im Sommer, selten im Herbst
   }
   butterflies.forEach(b => b.update(tips)); // Alle Schmetterlinge aktualisieren
 }
@@ -1091,7 +1229,7 @@ function drawCursor(x,y) {
   });
   if (closest) {                     // Vorschaulinie zum nächsten Node zeichnen
     ctx.save();
-    ctx.strokeStyle=`rgba(${ACCENT_RGB},${(1-closestDist/CONNECT_R)*0.28})`; // Stärker je näher
+    ctx.strokeStyle=`rgba(${getAccentRGB()},${(1-closestDist/CONNECT_R)*0.28})`; // Stärker je näher
     ctx.lineWidth=0.6; ctx.setLineDash([3,6]); // Gestrichelte grüne Vorschaulinie
     ctx.beginPath(); ctx.moveTo(x,y); ctx.lineTo(closest.x,closest.y); ctx.stroke();
     ctx.setLineDash([]); ctx.restore();
@@ -1127,7 +1265,7 @@ function drawTipConnections(tips) {
       const d=Math.sqrt(dx*dx+dy*dy);
       if (d>=MAX_D) continue;        // Zu weit entfernt → überspringen
       ctx.setLineDash([2,5]);        // Kurze Strichelung
-      ctx.strokeStyle=`rgba(${ACCENT_RGB},${(1-d/MAX_D)*0.1})`; // Grün, fast unsichtbar
+      ctx.strokeStyle=`rgba(${getAccentRGB()},${(1-d/MAX_D)*0.1})`; // Grün, fast unsichtbar
       ctx.lineWidth=0.5;
       ctx.beginPath(); ctx.moveTo(tips[i].x,tips[i].y); ctx.lineTo(tips[j].x,tips[j].y); ctx.stroke();
     }
@@ -1166,6 +1304,7 @@ canvas.addEventListener('dblclick',()=>{
   nodes.forEach(n=>n.fadeOut());     // Alle Nodes ausblenden
   connections.forEach(c=>c.fadeOut()); // Alle Verbindungen ausblenden
   butterflies.forEach(b=>b.fadeOut()); // Alle Schmetterlinge ausblenden
+  fallingLeaves = [];                // Fallende Blätter sofort entfernen
   hint2.classList.remove('show');    // Zweiten Hinweis verstecken
   hint.classList.remove('fade');     // Ersten Hinweis wieder zeigen
   firstClick=false;                  // Zustand zurücksetzen
@@ -1186,6 +1325,14 @@ canvas.addEventListener('mouseleave', ()=>{ mouse.x=-9999; mouse.y=-9999; });   
 function loop() {
   ctx.clearRect(0,0,W,H);           // Canvas komplett leeren (altes Bild löschen)
 
+  updateSeason();                    // Jahreszeit voranschreiten und Farbe interpolieren
+
+  // Sehr subtile Hintergrund-Tönung je nach Jahreszeit (kaum sichtbar, aber spürbar)
+  ctx.save();
+  ctx.fillStyle = `rgba(${Math.round(currentR)},${Math.round(currentG)},${Math.round(currentB)},0.012)`;
+  ctx.fillRect(0,0,W,H);            // Hauchdünner farbiger Schleier über dem schwarzen Hintergrund
+  ctx.restore();
+
   nodes      =nodes.filter(n=>!n.dead);       // Tote Nodes aus der Liste entfernen
   connections=connections.filter(c=>!c.dead); // Tote Verbindungen entfernen
   particles  =particles.filter(p=>!p.dead);   // Tote Partikel entfernen
@@ -1205,6 +1352,24 @@ function loop() {
 
   manageButterflies(tips);            // Schmetterlinge verwalten und aktualisieren
   butterflies.forEach(b=>b.draw());   // Schmetterlinge über den Pflanzen zeichnen
+
+  // ── Autonomes Wachstum (Frühling/Sommer) ──
+  // Im Frühling alle ~25s, im Sommer alle ~15s sprießt eine neue Pflanze an einer Blattspitze
+  if (seasonIndex < 2 && tips.length > 0) {
+    const growChance = seasonIndex === 0 ? 0.00006 : 0.0001; // Sommer häufiger als Frühling
+    if (Math.random() < growChance) {
+      const t   = tips[Math.floor(Math.random()*tips.length)]; // Zufällige Blattspitze als Ursprung
+      const ang = (Math.random()-0.5) * Math.PI;               // Zufällige Richtung
+      if (connections.length > 0) {
+        const c = connections[Math.floor(Math.random()*connections.length)]; // Zufällige Verbindung
+        if (!c.fading && !c.dead) c.plants.push(makePlant(t.x, t.y, ang));  // Neue Pflanze anhängen
+      }
+    }
+  }
+
+  // ── Fallende Blätter (Herbst/Winter) ──
+  fallingLeaves = fallingLeaves.filter(l => !l.dead); // Tote Blätter entfernen
+  fallingLeaves.forEach(l => { l.update(); l.draw(); }); // Blätter aktualisieren und zeichnen
 
   particles.forEach(p=>p.draw());     // Partikel über den Pflanzen zeichnen
   nodes.forEach(n=>n.draw());         // Nodes ganz oben zeichnen (immer sichtbar)
