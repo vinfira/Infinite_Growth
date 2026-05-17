@@ -19,10 +19,83 @@ let H = canvas.height = window.innerHeight; // Höhe:   Canvas = Fensterhöhe,  
 let nodes       = [];               // Liste aller platzierten Node-Objekte
 let connections = [];               // Liste aller Verbindungen zwischen Nodes
 let particles   = [];               // Liste aller aktiven Partikel
+let butterflies = [];               // Liste aller aktiven Schmetterlinge
 let mouse       = { x:-9999, y:-9999 }; // Aktuelle Mausposition (startet weit außerhalb)
 let firstClick  = false;            // Wurde schon einmal geklickt? (steuert Hinweistexte)
 let nodeCount   = 0;                // Zähler für eindeutige Node-IDs
 let plantCount  = 0;                // Gesamtanzahl bisher gewachsener Pflanzen
+
+// ════════════════════════════════════════════
+// WIND
+// Zwei überlagerte Sinuswellen mit verschiedenen
+// Frequenzen → organisches, unregelmäßiges Wehen.
+// windSway ist der aktuelle Neigungswinkel (Radiant).
+// ════════════════════════════════════════════
+
+let windTime = 0;                   // Läuft kontinuierlich hoch, treibt die Sinuswellen an
+let windSway = 0;                   // Aktueller Neigungswinkel aller Pflanzen (sehr klein)
+
+function updateWind() {
+  windTime += 0.007;                // Zeit voranschreiten (Geschwindigkeit des Winds)
+  // Drei Sinuswellen mit verschiedenen Frequenzen überlagern → kein mechanisches Hin-und-her
+  windSway = Math.sin(windTime * 0.65) * 0.055  // Langsame Hauptbewegung
+           + Math.sin(windTime * 1.4 ) * 0.022  // Mittlere Böe
+           + Math.sin(windTime * 2.8 ) * 0.010; // Kleines schnelles Zittern
+}
+
+
+// ════════════════════════════════════════════
+// SOUND SYSTEM (Web Audio API)
+// Alle Töne werden direkt im Code erzeugt –
+// kein externes File nötig. Sehr leise und
+// organisch. Wird beim ersten Klick aktiviert.
+// ════════════════════════════════════════════
+
+let audioCtx = null;                // AudioContext – wird erst bei erstem Klick erstellt (Browser-Regel)
+
+function getAudio() {               // Gibt den AudioContext zurück, erstellt ihn bei Bedarf
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  return audioCtx;
+}
+
+function playTone(freq, type='sine', duration=0.35, vol=0.07, delay=0) {
+  // Spielt einen einzelnen Ton: freq=Frequenz (Hz), type=Wellenform, duration=Dauer, vol=Lautstärke
+  try {
+    const ac  = getAudio();
+    const osc = ac.createOscillator();  // Oszillator: erzeugt den eigentlichen Ton
+    const gain= ac.createGain();        // Gain-Node: steuert die Lautstärke
+    osc.connect(gain);                  // Oszillator → Lautstärkeregler
+    gain.connect(ac.destination);       // Lautstärkeregler → Lautsprecher
+
+    osc.type      = type;               // Wellenform: sine (weich), triangle (wärmer), etc.
+    osc.frequency.setValueAtTime(freq, ac.currentTime + delay); // Frequenz setzen
+
+    const t = ac.currentTime + delay;   // Startzeitpunkt
+    gain.gain.setValueAtTime(0, t);                    // Startet bei 0 (kein Knacken)
+    gain.gain.linearRampToValueAtTime(vol, t+0.02);    // Schneller Attack (0.02s einblenden)
+    gain.gain.exponentialRampToValueAtTime(0.001, t+duration); // Langsam ausklingen
+
+    osc.start(t);                       // Ton starten
+    osc.stop(t + duration + 0.05);      // Ton stoppen (etwas nach dem Ende)
+  } catch(e) {}                         // Fehler ignorieren (z.B. wenn Audio gesperrt ist)
+}
+
+function playConnectionSound() {    // Ton wenn eine neue Verbindung entsteht
+  // Zwei leise Töne kurz hintereinander → sanftes "Pling"
+  playTone(330, 'sine', 0.5, 0.06);
+  playTone(440, 'sine', 0.4, 0.04, 0.08); // Zweiter Ton 80ms verzögert
+}
+
+// Jeder Pflanzentyp hat einen eigenen charakteristischen Ton
+const PLANT_SOUNDS = {
+  tree:      () => { playTone(196, 'triangle', 0.6, 0.05); },                       // Tief, warm
+  flower:    () => { playTone(523, 'sine', 0.5, 0.06); playTone(659,'sine',0.4,0.04,0.1); }, // Hell, zweitönig
+  grass:     () => { playTone(880, 'sine', 0.2, 0.04); },                           // Hoch, kurz
+  mushroom:  () => { playTone(130, 'triangle', 0.7, 0.05); },                       // Sehr tief, dumpf
+  dandelion: () => {                                                                 // Aufsteigend (wie aufblasen)
+    [523,587,659,698].forEach((f,i) => playTone(f,'sine',0.2,0.04,i*0.06));
+  },
+};
 
 /* Passt Canvas-Größe an wenn das Fenster vergrößert oder verkleinert wird */
 window.addEventListener('resize', () => {
@@ -63,6 +136,9 @@ class TreePlant {
     if (this.dead) return;           // Tote Bäume werden übersprungen
     ctx.save();                      // Aktuellen Zeichenzustand sichern
     ctx.globalAlpha = Math.max(0, this.opacity); // Globale Transparenz setzen (nie unter 0)
+    ctx.translate(this.ox, this.oy); // Koordinatensystem zur Wurzel verschieben
+    ctx.rotate(windSway * 1.4);      // Wind: Baum neigt sich leicht (0.8 = etwas weniger als Gras)
+    ctx.translate(-this.ox, -this.oy); // Koordinatensystem zurückverschieben
     this.root.draw();                // Wurzelast zeichnen (zeichnet rekursiv alle Äste)
     ctx.restore();                   // Gesicherten Zeichenzustand wiederherstellen
   }
@@ -303,6 +379,9 @@ class FlowerPlant {
   draw() {
     if (this.dead) return;
     ctx.save(); ctx.globalAlpha=Math.max(0,this.opacity);
+    ctx.translate(this.ox, this.oy); // Zur Blumenbasis verschieben
+    ctx.rotate(windSway * 1.8);      // Blumen wiegen sich etwas stärker als Bäume
+    ctx.translate(-this.ox, -this.oy);
     ctx.strokeStyle='rgba(255,255,255,0.55)'; // Stielfarbe: halb-transparentes Weiß
     ctx.lineWidth=1.2; ctx.lineCap='round';
     ctx.beginPath();
@@ -375,9 +454,11 @@ class GrassPlant {
   draw() {
     if (this.dead) return;
     ctx.save(); ctx.globalAlpha=Math.max(0,this.opacity);
-    this.blades.forEach(b=>{
-      const tx=this.ox+Math.sin(b.angle)*b.currentLen; // Aktuelle Halmspitze X
-      const ty=this.oy-Math.cos(b.angle)*b.currentLen; // Aktuelle Halmspitze Y
+    this.blades.forEach((b, i)=>{
+      // Jeder Halm bekommt einen leicht versetzten Windwinkel → kein synchrones Schwingen
+      const bladeSway = windSway * 2.5 + Math.sin(windTime * 1.8 + i * 0.9) * 0.018;
+      const tx=this.ox+Math.sin(b.angle + bladeSway)*b.currentLen; // Spitze X mit Windsway
+      const ty=this.oy-Math.cos(b.angle + bladeSway)*b.currentLen; // Spitze Y mit Windsway
       ctx.strokeStyle=`rgba(255,255,255,${b.alpha})`; // Halm-Farbe mit individueller Transparenz
       ctx.lineWidth=b.strokeW; ctx.lineCap='round';
       ctx.beginPath(); ctx.moveTo(this.ox,this.oy); ctx.lineTo(tx,ty); ctx.stroke(); // Halm zeichnen
@@ -386,7 +467,7 @@ class GrassPlant {
         const col=b.accent?ACCENT:`rgba(255,255,255,${b.alpha})`; // Grün oder Halmfarbe
         ctx.save();
         ctx.translate(tx,ty);        // Zur Halmspitze verschieben
-        ctx.rotate(b.angle);         // In Halmrichtung drehen
+        ctx.rotate(b.angle + bladeSway); // In Halmrichtung + Windneigung drehen
         ctx.fillStyle=col;
         if (b.accent){ctx.shadowColor=ACCENT;ctx.shadowBlur=10;} // Grüner Schein
         ctx.beginPath();
@@ -502,6 +583,9 @@ class MushroomPlant {
   draw() {
     if (this.dead) return;
     ctx.save(); ctx.globalAlpha=Math.max(0,this.opacity);
+    ctx.translate(this.ox, this.oy); // Zur Pilzbasis verschieben
+    ctx.rotate(windSway * 0.7);     // Pilze sind stämmig → sehr wenig Windbewegung
+    ctx.translate(-this.ox, -this.oy);
     this.cluster.forEach(m=>{        // Kleine Pilze zuerst (= im Hintergrund)
       this.drawMushroom(m.ox,this.oy,m.stemH,m.stemW,m.capR,m.capProgress,m.accent,null);
     });
@@ -557,6 +641,9 @@ class DandelionPlant {
   draw() {
     if (this.dead) return;
     ctx.save(); ctx.globalAlpha=Math.max(0,this.opacity);
+    ctx.translate(this.ox, this.oy); // Zur Basis verschieben
+    ctx.rotate(windSway * 2.4);      // Löwenzahn hat dünnen Stiel → wippt am meisten
+    ctx.translate(-this.ox, -this.oy);
     const curTipX=this.ox+Math.sin(this.angle+this.lean)*this.stemLen; // Aktuelle Stielspitze X
     const curTipY=this.oy-Math.cos(this.angle+this.lean)*this.stemLen; // Aktuelle Stielspitze Y
     ctx.strokeStyle='rgba(255,255,255,0.5)'; ctx.lineWidth=0.9; ctx.lineCap='round';
@@ -693,6 +780,14 @@ class Connection {
     }
     plantCount+=count;               // Globalen Zähler erhöhen
     updateStats();                   // Anzeige aktualisieren
+    // Ton für den zuerst gewachsenen Pflanzentyp abspielen
+    const firstPlant = this.plants[0];
+    const typeName =
+      firstPlant instanceof FlowerPlant   ? 'flower'    :
+      firstPlant instanceof GrassPlant    ? 'grass'     :
+      firstPlant instanceof MushroomPlant ? 'mushroom'  :
+      firstPlant instanceof DandelionPlant? 'dandelion' : 'tree';
+    if (PLANT_SOUNDS[typeName]) PLANT_SOUNDS[typeName](); // Pflanzen-spezifischen Ton spielen
   }
 
   update() {
@@ -706,6 +801,7 @@ class Connection {
       if (this.lineProgress>=1) {    // Linie komplett gezeichnet:
         if (!this.particlesDone) {
           spawnParticles(this.a.x,this.a.y,this.b.x,this.b.y); // Partikel einmalig auslösen
+          playConnectionSound();     // Verbindungs-Ton spielen
           this.particlesDone=true;
         }
         if (!this.spawned) this.spawnPlants(); // Pflanzen einmalig erzeugen
@@ -806,7 +902,154 @@ function drawRipples() {
 
 
 // ════════════════════════════════════════════
-// HILFSFUNKTIONEN
+// SCHMETTERLING (BUTTERFLY)
+// Kleine geometrische Figur aus zwei Dreiecken.
+// Fliegt autonom zwischen Blattspitzen hin und
+// her. Flügel flattern durch eine sin-Animation.
+// Erscheint erst wenn genug Spitzen vorhanden.
+// ════════════════════════════════════════════
+
+class Butterfly {
+  constructor(x, y) {
+    this.x   = x; this.y = y;       // Startposition
+    this.tx  = x; this.ty = y;      // Zielposition (target)
+    this.vx  = 0; this.vy = 0;      // Aktuelle Geschwindigkeit
+    this.angle   = Math.random()*Math.PI*2; // Flugrichtung in Radiant
+    this.flutter = Math.random()*Math.PI*2; // Phase der Flügelanimation (Startwert zufällig)
+    this.flutterSpeed = 0.18 + Math.random()*0.12; // Wie schnell die Flügel schlagen
+    this.speed   = 0.6 + Math.random()*0.8;        // Fluggeschwindigkeit
+    this.size    = 3.5 + Math.random()*2.5;        // Flügelgröße (3.5–6 Pixel)
+    this.alpha   = 0;               // Startet unsichtbar
+    this.accent  = Math.random()<0.3; // 30% Chance: Akzentfarbe (grün)
+    this.waitTime= 0;               // Wartezeit an einer Blüte (in Frames)
+    this.waiting = false;           // Sitzt der Schmetterling gerade an einer Blüte?
+    this.dead    = false;           // Wird true wenn fadeOut abgeschlossen
+    this.fading  = false;           // Blendet langsam aus
+    this.wobble  = 0;               // Zufälliges Zittern beim Fliegen
+  }
+
+  setTarget(tips) {                 // Wählt eine neue Zielblüte aus der Spitzenliste
+    if (tips.length === 0) return;
+    const t = tips[Math.floor(Math.random()*tips.length)]; // Zufällige Spitze
+    this.tx = t.x + (Math.random()-0.5)*12; // Leicht versetzt damit Schmetterlinge sich nicht überlagern
+    this.ty = t.y + (Math.random()-0.5)*12;
+  }
+
+  update(tips) {
+    if (this.fading) {
+      this.alpha -= 0.012;          // Ausblenden
+      if (this.alpha <= 0) this.dead = true;
+      return;
+    }
+    this.alpha = Math.min(0.85, this.alpha + 0.02); // Einblenden (max 85% Deckkraft)
+    this.flutter += this.flutterSpeed; // Flügelanimation voranschreiten
+
+    if (this.waiting) {
+      this.waitTime--;              // Wartezeit herunterzählen
+      this.flutter += 0.04;        // Langsames Flügelzittern im Sitzen
+      if (this.waitTime <= 0) {
+        this.waiting = false;
+        this.setTarget(tips);       // Neue Zielblüte wählen
+      }
+      return;
+    }
+
+    // Auf Ziel zufliegen (sanfte Beschleunigung)
+    const dx = this.tx - this.x;
+    const dy = this.ty - this.y;
+    const d  = Math.sqrt(dx*dx + dy*dy); // Abstand zum Ziel
+
+    if (d < 8) {                    // Ziel fast erreicht: kurz warten
+      this.waiting  = true;
+      this.waitTime = 40 + Math.floor(Math.random()*80); // 40–120 Frames warten
+      return;
+    }
+
+    // Richtung zum Ziel berechnen + etwas Zittern für organische Bewegung
+    this.wobble = Math.sin(this.flutter*0.3) * 0.04; // Kleines seitliches Zittern
+    const targetAngle = Math.atan2(dy, dx);          // Winkel zum Ziel
+    // Winkel sanft angleichen (nicht abrupt drehen)
+    let da = targetAngle - this.angle;
+    if (da >  Math.PI) da -= Math.PI*2;              // Kürzesten Weg wählen
+    if (da < -Math.PI) da += Math.PI*2;
+    this.angle += da * 0.06 + this.wobble;           // Langsam drehen
+
+    this.vx = Math.cos(this.angle) * this.speed;     // Geschwindigkeit X aus Winkel
+    this.vy = Math.sin(this.angle) * this.speed;     // Geschwindigkeit Y aus Winkel
+    this.x += this.vx;                               // Position aktualisieren
+    this.y += this.vy;
+
+    // Wenn kein Ziel mehr erreichbar: neues wählen
+    if (tips.length > 0 && Math.random() < 0.004) this.setTarget(tips);
+  }
+
+  draw() {
+    if (this.dead || this.alpha <= 0) return;
+    const s    = this.size;
+    const flap = Math.sin(this.flutter) * 0.8; // Flügelschlag: -0.8 bis +0.8 (Öffnungsgrad)
+    const col  = this.accent ? ACCENT : 'rgba(255,255,255,0.9)';
+
+    ctx.save();
+    ctx.globalAlpha = this.alpha;
+    ctx.translate(this.x, this.y);  // Koordinatensystem zum Schmetterling verschieben
+    ctx.rotate(this.angle + Math.PI/2); // In Flugrichtung drehen (+90° wegen Flügel-Ausrichtung)
+    ctx.fillStyle = col;
+    if (this.accent) { ctx.shadowColor = ACCENT; ctx.shadowBlur = 8; }
+    else             { ctx.shadowColor = 'rgba(255,255,255,0.3)'; ctx.shadowBlur = 4; }
+
+    // Linker Flügel: Dreieck, kippt nach links mit flap
+    ctx.save();
+    ctx.rotate(-flap * 0.6);        // Flügelschlag-Rotation links
+    ctx.beginPath();
+    ctx.moveTo(0, 0);               // Körpermitte
+    ctx.lineTo(-s * 1.6, -s * 0.5 - flap*s*0.4); // Flügelspitze oben links
+    ctx.lineTo(-s * 0.8,  s * 0.9); // Flügelspitze unten links
+    ctx.closePath(); ctx.fill();
+    ctx.restore();
+
+    // Rechter Flügel: Spiegelung des linken
+    ctx.save();
+    ctx.rotate(flap * 0.6);         // Flügelschlag-Rotation rechts (spiegelverkehrt)
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo( s * 1.6, -s * 0.5 - flap*s*0.4);
+    ctx.lineTo( s * 0.8,  s * 0.9);
+    ctx.closePath(); ctx.fill();
+    ctx.restore();
+
+    // Körper: kleiner länglicher Kreis in der Mitte
+    ctx.fillStyle = this.accent ? 'rgba(255,255,255,0.9)' : `rgba(${ACCENT_RGB},0.7)`;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, s*0.18, s*0.55, 0, 0, Math.PI*2); // Schmaler Körper
+    ctx.fill();
+
+    ctx.restore();
+  }
+
+  fadeOut() { this.fading = true; } // Startet das Ausblenden
+}
+
+// Erzeugt einen neuen Schmetterling an einer zufälligen Blattspitze
+function spawnButterfly(tips) {
+  if (tips.length === 0) return;
+  const t = tips[Math.floor(Math.random()*tips.length)]; // Zufällige Startposition
+  const b = new Butterfly(t.x, t.y);
+  b.setTarget(tips);                // Sofort eine Zielblüte setzen
+  butterflies.push(b);
+}
+
+// Aktualisiert die Schmetterlingspopulation: zu wenige → neue spawnen, zu viele → älteste entfernen
+function manageButterflies(tips) {
+  const MAX = Math.min(6, Math.floor(tips.length / 2)); // Max. 6, aber nie mehr als halbe Spitzenanzahl
+  butterflies = butterflies.filter(b => !b.dead);       // Tote entfernen
+  if (tips.length >= 2 && butterflies.length < MAX && Math.random() < 0.008) {
+    spawnButterfly(tips);           // Zufällig neuen Schmetterling erzeugen (0.8% Chance pro Frame)
+  }
+  butterflies.forEach(b => b.update(tips)); // Alle Schmetterlinge aktualisieren
+}
+
+
+// ════════════════════════════════════════════
 // ════════════════════════════════════════════
 
 function findNearby(node) {          // Findet den nächsten Node innerhalb von CONNECT_R
@@ -922,6 +1165,7 @@ canvas.addEventListener('dblclick',()=>{
   lastMs=Date.now();                 // Verhindert dass der Einzelklick danach noch ausgelöst wird
   nodes.forEach(n=>n.fadeOut());     // Alle Nodes ausblenden
   connections.forEach(c=>c.fadeOut()); // Alle Verbindungen ausblenden
+  butterflies.forEach(b=>b.fadeOut()); // Alle Schmetterlinge ausblenden
   hint2.classList.remove('show');    // Zweiten Hinweis verstecken
   hint.classList.remove('fade');     // Ersten Hinweis wieder zeigen
   firstClick=false;                  // Zustand zurücksetzen
@@ -950,6 +1194,7 @@ function loop() {
   nodes.forEach(n=>n.update());       // Nodes aktualisieren
   particles.forEach(p=>p.update());   // Partikel aktualisieren
   updateRipples();                    // Ripples aktualisieren
+  updateWind();                       // Wind-Winkel für diesen Frame berechnen
 
   connections.forEach(c=>c.draw());   // Verbindungen + Pflanzen zeichnen (im Hintergrund)
 
@@ -957,6 +1202,9 @@ function loop() {
   connections.forEach(c=>tips.push(...c.getTips())); // Spread-Operator: Array in Array einfügen
   if (tips.length>1&&tips.length<300) // Nur wenn sinnvolle Menge vorhanden
     drawTipConnections(tips);         // Akzent-Linien zwischen nahen Blattspitzen zeichnen
+
+  manageButterflies(tips);            // Schmetterlinge verwalten und aktualisieren
+  butterflies.forEach(b=>b.draw());   // Schmetterlinge über den Pflanzen zeichnen
 
   particles.forEach(p=>p.draw());     // Partikel über den Pflanzen zeichnen
   nodes.forEach(n=>n.draw());         // Nodes ganz oben zeichnen (immer sichtbar)
