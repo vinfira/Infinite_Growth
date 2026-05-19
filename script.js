@@ -45,6 +45,18 @@ function updateSeason() {
     seasonFrame  = 0;               // Zurücksetzen
     seasonIndex  = (seasonIndex + 1) % 4; // Nächste Jahreszeit (0→1→2→3→0)
     if (seasonEl) seasonEl.textContent = SEASONS[seasonIndex].name; // UI aktualisieren
+    // Beim Wechsel zu Herbst oder Winter: alle Blätter bekommen neue zufällige Wartezeiten
+    if (seasonIndex === 2 || seasonIndex === 3) {
+      connections.forEach(c => c.plants.forEach(p => {
+        if (p instanceof TreePlant) {
+          const resetDelay = seg => {
+            seg.wiltDelay = Math.floor(Math.random() * 1800); // Neue zufällige Wartezeit
+            seg.children.forEach(resetDelay); // Rekursiv für alle Unteräste
+          };
+          resetDelay(p.root);
+        }
+      }));
+    }
   }
 
   // Sanfte Farbinterpolation: in den letzten TRANSITION_DUR Frames zur nächsten Farbe überblenden
@@ -226,6 +238,7 @@ class TreeSeg {                      // Ein einzelnes Ast-Segment des Baums
     this.children=[];                // Unteräste (leer, werden nach Wachstum erstellt)
     this.isLeaf = depth>=maxD;       // Ist das ein Blatt? (letzter Ast ohne Kinder)
     this.leafProgress=0;             // Fortschritt der Blatt-Animation (0–1)
+    this.wiltDelay = Math.floor(Math.random() * 1800); // Zufällige Wartezeit vor dem Welken (0–30 Sek.)
     const types=['triangle','circle','diamond','dots']; // Mögliche Blattformen
     this.leafType  = types[Math.floor(Math.random()*types.length)]; // Zufällige Blattform
     this.leafAccent = Math.random()<0.22; // 22% Chance: Blatt erscheint in Akzentfarbe (grün)
@@ -260,14 +273,18 @@ class TreeSeg {                      // Ein einzelnes Ast-Segment des Baums
         // Frühling/Sommer: Blätter wachsen langsam ein
         this.leafProgress = Math.min(1, this.leafProgress + 0.025);
       } else {
-        // Herbst/Winter: Blätter fallen langsam ab
-        const wiltSpeed = seasonIndex === 2 ? 0.0015 : 0.003; // Herbst langsam, Winter schneller
-        if (this.leafProgress > 0) {
-          this.leafProgress = Math.max(0, this.leafProgress - wiltSpeed);
-          // Wenn Blatt fast weg: ein fallendes Blatt erzeugen
-          if (this.leafProgress < 0.15 && this.leafProgress > 0 && Math.random() < 0.008) {
-            fallingLeaves.push(new FallingLeaf(this.tipX, this.tipY, this.leafType, this.leafSize));
-            this.leafProgress = 0;  // Blatt sofort entfernen nach dem Ablösen
+        // Herbst/Winter: Blätter fallen langsam ab – aber jedes mit individueller Verzögerung
+        if (this.wiltDelay > 0) {
+          this.wiltDelay--;          // Erst warten bevor dieses Blatt anfängt zu welken
+        } else {
+          const wiltSpeed = seasonIndex === 2 ? 0.0015 : 0.003; // Herbst langsam, Winter schneller
+          if (this.leafProgress > 0) {
+            this.leafProgress = Math.max(0, this.leafProgress - wiltSpeed);
+            // Wenn Blatt fast weg: ein fallendes Blatt erzeugen
+            if (this.leafProgress < 0.15 && this.leafProgress > 0 && Math.random() < 0.008) {
+              fallingLeaves.push(new FallingLeaf(this.tipX, this.tipY, this.leafType, this.leafSize));
+              this.leafProgress = 0; // Blatt sofort entfernen nach dem Ablösen
+            }
           }
         }
       }
