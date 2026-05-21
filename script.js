@@ -1055,6 +1055,78 @@ class FallingLeaf {
 }
 
 let fallingLeaves = [];             // Liste aller aktiven fallenden Blätter
+
+
+// ════════════════════════════════════════════
+// SCHNEE (Snowflake)
+// Erscheint nur im Winter. Jede Schneeflocke
+// ist ein kleiner weißer Kreis oder ein
+// einfaches Kreuz aus zwei kurzen Linien.
+// Fällt langsam, schaukelt im Wind.
+// ════════════════════════════════════════════
+
+class Snowflake {
+  constructor() {
+    this.reset(true);                // true = erste Initialisierung (zufällige Y-Position)
+  }
+
+  reset(initial = false) {
+    this.x     = Math.random() * W;                      // Zufällige X-Position über die Breite
+    this.y     = initial ? Math.random() * H : -8;       // Beim Start verteilt, sonst oben außerhalb
+    this.size  = 0.8 + Math.random() * 2.2;              // Kleine Flocken (0.8–3 Pixel)
+    this.vy    = 0.3 + Math.random() * 0.7;              // Fallgeschwindigkeit: sehr langsam
+    this.vx    = (Math.random()-0.5) * 0.4;              // Leichte seitliche Drift
+    this.wobble= Math.random() * Math.PI * 2;            // Startphase für seitliches Schaukeln
+    this.wobbleSpeed = 0.01 + Math.random() * 0.015;     // Schaukel-Geschwindigkeit
+    this.alpha = 0.25 + Math.random() * 0.45;            // Transparenz: zart, nicht zu weiß
+    this.isCross = Math.random() < 0.3;                  // 30% Chance: Kreuz-Form statt Kreis
+  }
+
+  update() {
+    this.wobble += this.wobbleSpeed;                     // Schaukel-Phase voranschreiten
+    this.x += this.vx + Math.sin(this.wobble) * 0.4 + windSway * 6; // Schaukeln + Wind
+    this.y += this.vy;                                   // Nach unten fallen
+    if (this.y > H + 10 || this.x < -20 || this.x > W + 20) {
+      this.reset();                                      // Außerhalb: oben neu einsetzen
+    }
+  }
+
+  draw() {
+    ctx.save();
+    ctx.globalAlpha = this.alpha;
+    ctx.fillStyle   = '#fff';
+    ctx.strokeStyle = '#fff';
+    if (this.isCross) {                                  // Kreuz-Form: zwei kurze Linien
+      ctx.lineWidth = 0.6;
+      const s = this.size * 1.4;
+      ctx.beginPath();
+      ctx.moveTo(this.x - s, this.y); ctx.lineTo(this.x + s, this.y); // Horizontale Linie
+      ctx.moveTo(this.x, this.y - s); ctx.lineTo(this.x, this.y + s); // Vertikale Linie
+      ctx.stroke();
+    } else {                                             // Kreis-Form: einfacher Punkt
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+}
+
+let snowflakes = [];                // Liste aller aktiven Schneeflocken
+
+function manageSnow() {
+  if (seasonIndex !== 3) {         // Nur im Winter Schnee
+    // Beim Wechsel aus dem Winter: Schneeflocken langsam entfernen (einfach leeren)
+    if (snowflakes.length > 0) snowflakes = [];
+    return;
+  }
+  // Zielanzahl: 80 Flocken für leichten Schneefall
+  const TARGET = 80;
+  if (snowflakes.length < TARGET) {
+    snowflakes.push(new Snowflake()); // Neue Flocke hinzufügen bis Ziel erreicht
+  }
+  snowflakes.forEach(s => s.update()); // Alle Flocken aktualisieren
+}
 // Kleine geometrische Figur aus zwei Dreiecken.
 // Fliegt autonom zwischen Blattspitzen hin und
 // her. Flügel flattern durch eine sin-Animation.
@@ -1322,6 +1394,7 @@ canvas.addEventListener('dblclick',()=>{
   connections.forEach(c=>c.fadeOut()); // Alle Verbindungen ausblenden
   butterflies.forEach(b=>b.fadeOut()); // Alle Schmetterlinge ausblenden
   fallingLeaves = [];                // Fallende Blätter sofort entfernen
+  snowflakes    = [];                // Schnee sofort entfernen
   hint2.classList.remove('show');    // Zweiten Hinweis verstecken
   hint.classList.remove('fade');     // Ersten Hinweis wieder zeigen
   firstClick=false;                  // Zustand zurücksetzen
@@ -1387,6 +1460,10 @@ function loop() {
   // ── Fallende Blätter (Herbst/Winter) ──
   fallingLeaves = fallingLeaves.filter(l => !l.dead); // Tote Blätter entfernen
   fallingLeaves.forEach(l => { l.update(); l.draw(); }); // Blätter aktualisieren und zeichnen
+
+  // ── Schnee (nur Winter) ──
+  manageSnow();                       // Schneeflocken verwalten und aktualisieren
+  snowflakes.forEach(s => s.draw());  // Schneeflocken ganz oben zeichnen (über allem)
 
   particles.forEach(p=>p.draw());     // Partikel über den Pflanzen zeichnen
   nodes.forEach(n=>n.draw());         // Nodes ganz oben zeichnen (immer sichtbar)
