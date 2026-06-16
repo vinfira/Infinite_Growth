@@ -46,6 +46,20 @@ let handLandmarker;                                  // Hier wird gleich das gel
 let lastPinch = false;                               // Merkt sich, ob im letzten Frame schon gepincht wurde (verhindert Dauerfeuer)
 const PINCH_DISTANCE = 0.06;                          // Schwelle: wie nah Daumen + Zeigefinger sein müssen, damit es als "Klick" zählt
 
+// ── Zustand für die Glättung (smoother Cursor) ──────────────────
+let smoothX = null, smoothY = null;                  // Geglättete Cursor-Position (folgt der Hand verzögert)
+const SMOOTHING = 0.20;                               // Wie schnell der Cursor der Hand folgt: 1 = sofort/wackelig, klein = sehr glatt aber träge
+
+// ── Zustand für die Winke-Geste (Löschen) ───────────────────────
+let prevWristX = null;                               // Letzte horizontale Position des Handgelenks (zum Vergleich)
+let prevDir = 0;                                     // Letzte Bewegungsrichtung: -1 = links, +1 = rechts, 0 = noch keine
+let reversals = [];                                  // Zeitpunkte der letzten Richtungswechsel (Kern des Winkens)
+let lastWaveTime = 0;                                // Zeitpunkt des letzten ausgelösten Winkens (für Abklingzeit)
+const WAVE_MIN_STEP = 0.018;                          // Mindest-Bewegung, damit sie zählt (filtert kleines Zittern weg)
+const WAVE_WINDOW = 1500;                             // Zeitfenster in ms, in dem die Richtungswechsel passieren müssen
+const WAVE_REVERSALS = 4;                             // Nötige Richtungswechsel (≈ 2 volle Hin-und-Her-Bewegungen)
+const WAVE_COOLDOWN = 2500;                           // Abklingzeit in ms nach dem Auslösen (kein sofortiges erneutes Löschen)
+
 // Hilfsfunktion: simuliert ein echtes Maus-Ereignis an einer Bildschirmposition ───
 function fireMouse(type, x, y) {                     // type = "mousemove" oder "click", x/y = Pixelposition
   const ev = new MouseEvent(type, {                  // Ein echtes MouseEvent-Objekt bauen
@@ -100,8 +114,14 @@ function detect() {
       const indexTip = hand[8];                      // Landmark 8 = Spitze des Zeigefingers
       const thumbTip = hand[4];                      // Landmark 4 = Spitze des Daumens
 
-      const x = (1 - indexTip.x) * window.innerWidth;  // X spiegeln (Kamera ist gespiegelt) und auf Fensterbreite skalieren
-      const y = indexTip.y * window.innerHeight;       // Y auf Fensterhöhe skalieren
+      const targetX = (1 - indexTip.x) * window.innerWidth;  // Roh-Zielposition X: spiegeln + auf Fensterbreite skalieren
+      const targetY = indexTip.y * window.innerHeight;       // Roh-Zielposition Y: auf Fensterhöhe skalieren
+
+      if (smoothX === null) { smoothX = targetX; smoothY = targetY; } // Beim ersten Frame direkt setzen (kein Sprung vom Bildrand)
+      smoothX += (targetX - smoothX) * SMOOTHING;    // Cursor ein Stück Richtung Ziel bewegen (glättet das Zittern)
+      smoothY += (targetY - smoothY) * SMOOTHING;    // dasselbe für die Y-Achse
+      const x = smoothX;                             // Ab hier mit der geglätteten Position weiterarbeiten
+      const y = smoothY;                             // dasselbe für Y
 
       fireMouse("mousemove", x, y);                  // Maus an die Fingerposition bewegen (steuert deinen Cursor + Vorschaulinien)
 
@@ -115,8 +135,34 @@ function detect() {
         fireMouse("click", x, y);                    // "Klick" auslösen → script.js setzt einen Node an dieser Stelle
       }
       lastPinch = isPinch;                           // Pinch-Zustand für den nächsten Frame merken
+
+      // ── Winke-Geste erkennen ──────────────────────────────────
+      const now = performance.now();                 // Aktuelle Zeit (für die Zeitfenster-Logik)
+      const wristX = hand[0].x;                       // Landmark 0 = Handgelenk; nehmen wir als stabile Handposition
+      if (prevWristX === null) prevWristX = wristX;   // Beim allerersten Frame nur merken, noch nicht vergleichen
+      const move = wristX - prevWristX;              // Wie weit hat sich die Hand seit dem letzten Vergleich bewegt?
+      if (Math.abs(move) > WAVE_MIN_STEP) {          // Nur deutliche Bewegungen beachten (kleines Zittern ignorieren)
+        const dir = move > 0 ? 1 : -1;               // Richtung bestimmen: rechts (+1) oder links (-1)
+        if (prevDir !== 0 && dir !== prevDir) {      // Hat die Hand die Richtung umgekehrt?
+          reversals.push(now);                       // Ja → Zeitpunkt dieses Richtungswechsels merken
+        }
+        prevDir = dir;                               // Aktuelle Richtung für den nächsten Vergleich speichern
+        prevWristX = wristX;                         // Position nur bei deutlicher Bewegung aktualisieren
+      }
+      reversals = reversals.filter(t => now - t < WAVE_WINDOW); // Zu alte Richtungswechsel aus der Liste werfen
+      if (reversals.length >= WAVE_REVERSALS && now - lastWaveTime > WAVE_COOLDOWN) { // Genug Wechsel im Zeitfenster + Abklingzeit vorbei?
+        fireMouse("dblclick", x, y);                 // Doppelklick auslösen → script.js löscht alles
+        lastWaveTime = now;                          // Auslöse-Zeitpunkt merken (startet die Abklingzeit)
+        reversals = [];                              // Zähler zurücksetzen, damit es nicht sofort erneut auslöst
+        status.textContent = "✦ cleared";            // Kurze Rückmeldung in der Statusanzeige
+        setTimeout(() => { status.textContent = "camera: on"; }, 900); // Nach 0,9 s wieder normalen Status zeigen
+      }
     } else {
       lastPinch = false;                             // Keine Hand sichtbar → Pinch-Zustand zurücksetzen
+      smoothX = null; smoothY = null;                // Geglättete Position vergessen (kein Rutschen beim Wiederauftauchen)
+      prevDir = 0;                                   // Winke-Richtung zurücksetzen (Hand ist ja weg)
+      reversals = [];                                // Gesammelte Richtungswechsel verwerfen
+      prevWristX = null;                             // Position vergessen, damit beim Wiederauftauchen sauber gestartet wird
     }
   }
   requestAnimationFrame(detect);                     // Browser bitten, detect() beim nächsten Frame erneut aufzurufen

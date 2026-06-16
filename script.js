@@ -280,8 +280,8 @@ function initAmbience() {
 
     windFilterNode = ac.createBiquadFilter();
     windFilterNode.type            = 'bandpass';    // Bandpass: nur ein Frequenzbereich ist hörbar
-    windFilterNode.frequency.value = 400;           // Startfrequenz (klingt wie fernes Rauschen)
-    windFilterNode.Q.value         = 0.8;           // Breite des Durchlassbereichs
+    windFilterNode.frequency.value = 300;           // Startfrequenz
+    windFilterNode.Q.value         = 0.4;           // Breiter Durchlassbereich → weicheres, diffuseres Rauschen
 
     windGainNode = ac.createGain();
     windGainNode.gain.value = 0;                    // Startet stumm, wird durch updateAmbience gesteuert
@@ -302,12 +302,12 @@ function updateAmbience() {
     const clamp    = Math.min(1, strength);          // Auf 0–1 begrenzen
 
     // Windlautstärke: leise bei schwachem Wind, lauter bei Böen
-    const targetVol  = clamp * 0.18;
-    windGainNode.gain.setTargetAtTime(targetVol, ac.currentTime, 0.4); // Sanfter Übergang (0.4s Zeitkonstante)
+    const targetVol  = clamp * 0.02;                                       // War 0.05 – nochmals leiser
+    windGainNode.gain.setTargetAtTime(targetVol, ac.currentTime, 0.8);     // Längerer Übergang (0.8s) → weicher
 
-    // Windfarbe: schwacher Wind klingt tief/dumpf, starker Wind heller/pfeifend
-    const targetFreq = 250 + clamp * 900;
-    windFilterNode.frequency.setTargetAtTime(targetFreq, ac.currentTime, 0.4);
+    // Windfarbe: schwacher Wind klingt tief/dumpf, starker Wind etwas heller – aber nicht zu hoch
+    const targetFreq = 200 + clamp * 400;                                  // War 250–1150Hz, jetzt 200–600Hz → angenehmer
+    windFilterNode.frequency.setTargetAtTime(targetFreq, ac.currentTime, 0.8);
 
     // Drone-Lautstärke: im Winter etwas leiser (kälte, Stille)
     if (droneMaster) {
