@@ -279,9 +279,9 @@ function initAmbience() {
     noiseSource.loop   = true;                      // Endlos loopen
 
     windFilterNode = ac.createBiquadFilter();
-    windFilterNode.type            = 'bandpass';    // Bandpass: nur ein Frequenzbereich ist hörbar
-    windFilterNode.frequency.value = 300;           // Startfrequenz
-    windFilterNode.Q.value         = 0.4;           // Breiter Durchlassbereich → weicheres, diffuseres Rauschen
+    windFilterNode.type            = 'lowpass';     // Lowpass statt Bandpass → viel weicher, kein Pfeifen
+    windFilterNode.frequency.value = 200;           // Nur sehr tiefe Frequenzen durchlassen
+    windFilterNode.Q.value         = 0.3;           // Breiter, diffuser Durchlass
 
     windGainNode = ac.createGain();
     windGainNode.gain.value = 0;                    // Startet stumm, wird durch updateAmbience gesteuert
@@ -302,12 +302,11 @@ function updateAmbience() {
     const clamp    = Math.min(1, strength);          // Auf 0–1 begrenzen
 
     // Windlautstärke: leise bei schwachem Wind, lauter bei Böen
-    const targetVol  = clamp * 0.02;                                       // War 0.05 – nochmals leiser
-    windGainNode.gain.setTargetAtTime(targetVol, ac.currentTime, 0.8);     // Längerer Übergang (0.8s) → weicher
+    const targetVol  = clamp * 0.008;                                      // Sehr leise – kaum wahrnehmbar
+    windGainNode.gain.setTargetAtTime(targetVol, ac.currentTime, 1.2);     // Sehr langsamer Übergang → kein Pumpen
 
-    // Windfarbe: schwacher Wind klingt tief/dumpf, starker Wind etwas heller – aber nicht zu hoch
-    const targetFreq = 200 + clamp * 400;                                  // War 250–1150Hz, jetzt 200–600Hz → angenehmer
-    windFilterNode.frequency.setTargetAtTime(targetFreq, ac.currentTime, 0.8);
+    const targetFreq = 150 + clamp * 100;                                  // 150–250Hz – nur tiefes, ruhiges Rauschen
+    windFilterNode.frequency.setTargetAtTime(targetFreq, ac.currentTime, 1.2);
 
     // Drone-Lautstärke: im Winter etwas leiser (kälte, Stille)
     if (droneMaster) {
