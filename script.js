@@ -96,6 +96,56 @@ let nodeCount   = 0;                // Zähler für eindeutige Node-IDs
 let plantCount  = 0;                // Gesamtanzahl bisher gewachsener Pflanzen
 
 // ════════════════════════════════════════════
+// KAMERA / WORLD SCALE
+// Die Welt zoomt langsam heraus (~3 Minuten)
+// und dann wieder heran (~1 Minute) – ein
+// endloser Rhythmus der das Infinity-Gefühl
+// erzeugt. Alle Spielobjekte werden im
+// Weltkoordinatensystem gezeichnet, Cursor
+// und Schnee bleiben im Bildschirmraum.
+// ════════════════════════════════════════════
+
+let worldScale  = 1.0;              // Aktueller Zoomfaktor (1 = normal, 0.18 = weit heraus)
+const MIN_SCALE = 0.18;             // Grenze bei der der Loop neu startet
+const MAX_SCALE = 1.0;              // Startgröße
+const ZOOM_OUT  = 0.000013;         // Zoom-out Geschwindigkeit (~3 Minuten für vollen Zyklus)
+
+let fadeAlpha = 0;                  // Schwarzer Überblend-Schleier (0 = unsichtbar, 1 = voll schwarz)
+let fadeDir   = 0;                  // 0 = kein Fade, 1 = ausblenden, -1 = einblenden
+
+function updateZoom() {
+  if (fadeDir === 0) {
+    worldScale = Math.max(MIN_SCALE, worldScale - ZOOM_OUT); // Kontinuierlich herauszoomen
+    if (worldScale <= MIN_SCALE) fadeDir = 1;                // Minimum erreicht → Ausblenden starten
+  } else if (fadeDir === 1) {
+    fadeAlpha = Math.min(1, fadeAlpha + 0.018);              // Schnell zu Schwarz einblenden
+    if (fadeAlpha >= 1) {
+      worldScale = MAX_SCALE;                                // Skala unsichtbar zurücksetzen
+      fadeDir = -1;                                          // Jetzt wieder aufhellen
+    }
+  } else {
+    fadeAlpha = Math.max(0, fadeAlpha - 0.012);              // Langsam aus Schwarz heraus
+    if (fadeAlpha <= 0) fadeDir = 0;                         // Loop beendet, normal weiterzoomen
+  }
+}
+
+// Bildschirmkoordinaten → Weltkoordinaten (für Klicks und Maus)
+function screenToWorld(sx, sy) {
+  return {
+    x: (sx - W/2) / worldScale + W/2, // Bildschirmmitte als Ankerpunkt des Zooms
+    y: (sy - H/2) / worldScale + H/2,
+  };
+}
+
+// Weltkoordinaten → Bildschirmkoordinaten (für Cursor-Vorschaulinie zu Nodes)
+function worldToScreen(wx, wy) {
+  return {
+    x: (wx - W/2) * worldScale + W/2,
+    y: (wy - H/2) * worldScale + H/2,
+  };
+}
+
+// ════════════════════════════════════════════
 // WIND
 // Zwei überlagerte Sinuswellen mit verschiedenen
 // Frequenzen → organisches, unregelmäßiges Wehen.
@@ -167,7 +217,105 @@ const PLANT_SOUNDS = {
   dandelion: () => {                                                                 // Aufsteigend (wie aufblasen)
     [523,587,659,698].forEach((f,i) => playTone(f,'sine',0.2,0.04,i*0.06));
   },
+  fern:      () => { playTone(294, 'triangle', 0.5, 0.05); playTone(370,'sine',0.4,0.03,0.12); }, // Weich, zweitönig
 };
+
+
+// ════════════════════════════════════════════
+// AMBIENT AUDIO
+// Zwei dauerhafte Klangschichten:
+// 1) Hintergrund-Drone: warme überlagerte
+//    Sinuswellen, sehr leise, immer präsent.
+// 2) Wind-Rauschen: gefiltertes weißes Rauschen,
+//    Lautstärke und Klangfarbe reagieren live
+//    auf windSway. Beide Schichten werden erst
+//    beim ersten Klick gestartet (Browser-Regel).
+// ════════════════════════════════════════════
+
+let ambienceReady  = false;         // Wurde die Ambient-Schicht schon gestartet?
+let windGainNode   = null;          // Lautstärke-Node des Wind-Rauschens
+let windFilterNode = null;          // Filter-Node des Wind-Rauschens
+let droneMaster    = null;          // Master-Gain des Hintergrund-Drones
+
+function initAmbience() {
+  if (ambienceReady) return;        // Nur einmal starten
+  ambienceReady = true;
+  try {
+    const ac = getAudio();
+
+    // ── Hintergrund-Drone ──
+    // Drei Sinuswellen in natürlichem Abstand (Quinte + Oktave) leicht verstimmt
+    droneMaster = ac.createGain();
+    droneMaster.gain.setValueAtTime(0, ac.currentTime);                     // Startet stumm
+    droneMaster.gain.linearRampToValueAtTime(0.055, ac.currentTime + 4.0);  // Blendet in 4s ein
+    droneMaster.connect(ac.destination);
+
+    [55, 82.4, 110].forEach((freq, i) => {          // A1, E2, A2 – ein ruhiger A-Moll-Klang
+      const osc    = ac.createOscillator();
+      const gain   = ac.createGain();
+      const filter = ac.createBiquadFilter();
+
+      osc.type            = 'sine';                 // Sinuswelle: weichster, reinster Klang
+      osc.frequency.value = freq + (Math.random()-0.5) * 1.5; // Leichte Verstimmung für Wärme
+      filter.type         = 'lowpass';              // Nur tiefe Frequenzen durchlassen
+      filter.frequency.value = 180;                 // Alles über 180Hz abschneiden → sehr warm
+      gain.gain.value     = [0.5, 0.3, 0.2][i];    // Tiefste Frequenz am lautesten
+
+      osc.connect(filter);
+      filter.connect(gain);
+      gain.connect(droneMaster);
+      osc.start();                                  // Dauerhaft laufen lassen
+    });
+
+    // ── Wind-Rauschen ──
+    // Weißes Rauschen (zufällige Samples) durch einen Bandpass-Filter gejagt
+    const bufSize   = ac.sampleRate * 4;            // 4 Sekunden Rauschpuffer (wird geloopt)
+    const noiseBuf  = ac.createBuffer(1, bufSize, ac.sampleRate);
+    const noiseData = noiseBuf.getChannelData(0);
+    for (let i = 0; i < bufSize; i++) noiseData[i] = Math.random()*2 - 1; // Zufällige Werte = weißes Rauschen
+
+    const noiseSource  = ac.createBufferSource();
+    noiseSource.buffer = noiseBuf;
+    noiseSource.loop   = true;                      // Endlos loopen
+
+    windFilterNode = ac.createBiquadFilter();
+    windFilterNode.type            = 'bandpass';    // Bandpass: nur ein Frequenzbereich ist hörbar
+    windFilterNode.frequency.value = 400;           // Startfrequenz (klingt wie fernes Rauschen)
+    windFilterNode.Q.value         = 0.8;           // Breite des Durchlassbereichs
+
+    windGainNode = ac.createGain();
+    windGainNode.gain.value = 0;                    // Startet stumm, wird durch updateAmbience gesteuert
+
+    noiseSource.connect(windFilterNode);
+    windFilterNode.connect(windGainNode);
+    windGainNode.connect(ac.destination);
+    noiseSource.start();                            // Rauschen läuft permanent, nur Lautstärke ändert sich
+
+  } catch(e) {}                                     // Fehler ignorieren falls Audio gesperrt
+}
+
+function updateAmbience() {
+  if (!ambienceReady || !windGainNode) return;
+  try {
+    const ac       = getAudio();
+    const strength = Math.abs(windSway) * 85;       // windSway (sehr kleine Zahl) → hörbare Stärke (0–~5)
+    const clamp    = Math.min(1, strength);          // Auf 0–1 begrenzen
+
+    // Windlautstärke: leise bei schwachem Wind, lauter bei Böen
+    const targetVol  = clamp * 0.18;
+    windGainNode.gain.setTargetAtTime(targetVol, ac.currentTime, 0.4); // Sanfter Übergang (0.4s Zeitkonstante)
+
+    // Windfarbe: schwacher Wind klingt tief/dumpf, starker Wind heller/pfeifend
+    const targetFreq = 250 + clamp * 900;
+    windFilterNode.frequency.setTargetAtTime(targetFreq, ac.currentTime, 0.4);
+
+    // Drone-Lautstärke: im Winter etwas leiser (kälte, Stille)
+    if (droneMaster) {
+      const droneVol = seasonIndex === 3 ? 0.03 : 0.055; // Winter: gedämpfter Drone
+      droneMaster.gain.setTargetAtTime(droneVol, ac.currentTime, 2.0); // Sehr langsamer Übergang
+    }
+  } catch(e) {}
+}
 
 /* Passt Canvas-Größe an wenn das Fenster vergrößert oder verkleinert wird */
 window.addEventListener('resize', () => {
@@ -770,13 +918,149 @@ class DandelionPlant {
 
 
 // ════════════════════════════════════════════
+// PFLANZENTYP 6: FARN
+// Ein langer Hauptstiel wächst nach oben.
+// Entlang des Stiels wachsen Fiederblätter
+// abwechselnd links und rechts heraus –
+// jede als schmale Ellipse. Nach oben hin
+// werden die Fieder kleiner (Verjüngung).
+// ════════════════════════════════════════════
+
+class FernPlant {
+  constructor(ox, oy, angle) {
+    this.ox=ox; this.oy=oy; this.angle=angle;
+    this.opacity=0; this.fading=false; this.dead=false;
+    this.stemLen=0;
+    this.stemTarget = 55 + Math.random()*50;  // Hauptstiellänge: 55–105 Pixel
+    this.stemSpeed  = 0.6 + Math.random()*0.4;
+    this.stemDone   = false;
+    this.accent     = Math.random()<0.2;       // 20% Chance auf Akzentfarbe
+    this.lean       = (Math.random()-0.5)*0.35; // Leichte Neigung
+
+    // Fiederblätter: gleichmäßig entlang des Stiels verteilt
+    const count = 6 + Math.floor(Math.random()*5); // 6–10 Fiederpaare
+    this.fronds = [];
+    for (let i=0; i<count; i++) {
+      const t = (i+1) / (count+1);             // Position am Stiel (0 = unten, 1 = oben)
+      const side = i%2===0 ? 1 : -1;           // Abwechselnd links und rechts
+      const scale = 1 - t*0.65;                // Oben kleiner: 100% → 35% der Maximalgröße
+      this.fronds.push({
+        t,                                     // Position entlang des Stiels (0–1)
+        side,                                  // Links (-1) oder rechts (+1)
+        len:    (10 + Math.random()*8) * scale,// Länge des Fiederblatts
+        width:  (3  + Math.random()*2) * scale,// Breite der Ellipse
+        progress: 0,                           // Wachstumsfortschritt (0–1)
+        delay: Math.floor(t * 60),             // Untere Fieder erscheinen früher
+      });
+    }
+  }
+
+  // Punkt auf dem Hauptstiel bei Anteil t berechnen
+  stemPoint(t, len) {
+    const a = this.angle + this.lean;
+    return {
+      x: this.ox + Math.sin(a) * len * t,
+      y: this.oy - Math.cos(a) * len * t,
+    };
+  }
+
+  update() {
+    if (this.fading) { this.opacity-=0.005; if(this.opacity<=0) this.dead=true; return; }
+    this.opacity = Math.min(1, this.opacity+0.04);
+    if (!this.stemDone) {
+      this.stemLen = Math.min(this.stemTarget, this.stemLen+this.stemSpeed); // Stiel wächst
+      if (this.stemLen>=this.stemTarget) this.stemDone=true;
+    }
+    // Fiederblätter erscheinen sobald der Stiel ihre Position erreicht hat
+    this.fronds.forEach(f => {
+      if (this.stemLen >= this.stemTarget * f.t) { // Stiel ist schon so weit?
+        f.progress = Math.min(1, f.progress + 0.022); // Fieder wächst heraus
+      }
+    });
+  }
+
+  draw() {
+    if (this.dead) return;
+    ctx.save(); ctx.globalAlpha=Math.max(0,this.opacity);
+    ctx.translate(this.ox, this.oy);  // Zur Basis verschieben
+    ctx.rotate(windSway * 1.2);       // Wind: Farn wiegt sich mittelstark
+    ctx.translate(-this.ox, -this.oy);
+
+    const col = this.accent ? getAccent() : 'rgba(255,255,255,0.78)';
+
+    // Hauptstiel zeichnen (aktuelle Länge)
+    const tip = this.stemPoint(1, this.stemLen);
+    ctx.strokeStyle = `rgba(255,255,255,0.45)`;
+    ctx.lineWidth = 0.9; ctx.lineCap='round';
+    ctx.beginPath();
+    ctx.moveTo(this.ox, this.oy);
+    ctx.lineTo(tip.x, tip.y);
+    ctx.stroke();
+
+    // Fiederblätter als Ellipsen zeichnen
+    this.fronds.forEach(f => {
+      if (f.progress <= 0) return;
+      const base = this.stemPoint(f.t, this.stemTarget); // Ansatzpunkt am Stiel
+      const a    = this.angle + this.lean;               // Hauptstiel-Winkel
+      // Fieder-Winkel: senkrecht zum Stiel + leicht nach unten geneigt
+      const fAngle = a + f.side * (Math.PI/2 - 0.35);
+
+      ctx.save();
+      ctx.translate(base.x, base.y);  // Zum Ansatzpunkt verschieben
+      ctx.rotate(fAngle);              // In Fiederrichtung drehen
+
+      const l = f.len  * f.progress;  // Aktuelle Fieder-Länge
+      const w = f.width* f.progress;  // Aktuelle Fieder-Breite
+
+      ctx.fillStyle = col;
+      if (this.accent) { ctx.shadowColor=getAccent(); ctx.shadowBlur=8; }
+      else             { ctx.shadowColor='rgba(255,255,255,0.15)'; ctx.shadowBlur=3; }
+
+      // Ellipse: schmale Breite, gestreckte Länge = Fiederblatt
+      ctx.beginPath();
+      ctx.ellipse(0, -l*0.5, w*0.5, l*0.5, 0, 0, Math.PI*2);
+      ctx.fill();
+
+      // Kleiner Punkt am Fieder-Ende
+      ctx.fillStyle = this.accent ? 'rgba(255,255,255,0.8)' : getAccent();
+      ctx.beginPath();
+      ctx.arc(0, -l, w*0.3, 0, Math.PI*2);
+      ctx.fill();
+
+      ctx.restore();
+    });
+
+    // Kleiner Kreis an der Stielspitze
+    if (this.stemDone) {
+      const top = this.stemPoint(1, this.stemTarget);
+      ctx.fillStyle = col;
+      ctx.beginPath();
+      ctx.arc(top.x, top.y, 2, 0, Math.PI*2);
+      ctx.fill();
+    }
+
+    ctx.restore();
+  }
+
+  getTips() {
+    if (this.stemDone) {
+      const top = this.stemPoint(1, this.stemTarget);
+      return [{ x: top.x, y: top.y }];
+    }
+    return [];
+  }
+  fadeOut() { this.fading=true; }
+}
+
+
+// ════════════════════════════════════════════
 // FACTORY-FUNKTION
 // Wählt zufällig einen Pflanzentyp aus und
 // erstellt ihn. Baum und Blume sind doppelt
 // gewichtet (erscheinen häufiger).
 // ════════════════════════════════════════════
 
-const PLANT_TYPES=['tree','tree','flower','flower','grass','mushroom','dandelion']; // Gewichtete Liste
+const PLANT_TYPES=['tree','tree','flower','flower','grass','mushroom','dandelion','fern']; // Gewichtete Liste
 
 function makePlant(ox,oy,angle) {    // Erstellt eine zufällige Pflanze an Position ox/oy
   const type=PLANT_TYPES[Math.floor(Math.random()*PLANT_TYPES.length)]; // Zufälligen Typ wählen
@@ -785,6 +1069,7 @@ function makePlant(ox,oy,angle) {    // Erstellt eine zufällige Pflanze an Posi
     case 'grass':     return new GrassPlant(ox,oy,angle);
     case 'mushroom':  return new MushroomPlant(ox,oy,angle);
     case 'dandelion': return new DandelionPlant(ox,oy,angle);
+    case 'fern':      return new FernPlant(ox,oy,angle);
     default:          return new TreePlant(ox,oy,angle); // Fallback: Baum
   }
 }
@@ -1309,18 +1594,23 @@ function updateStats() {             // Aktualisiert die Statistik-Anzeige
 // Vorschaulinie zum nächsten Node.
 // ════════════════════════════════════════════
 
-function drawCursor(x,y) {
-  let closest=null, closestDist=CONNECT_R; // Nächsten Node zur Mausposition suchen
+function drawCursor(wx,wy) {          // wx/wy = Mausposition in Weltkoordinaten
+  const sc=worldToScreen(wx,wy);     // In Bildschirmkoords umrechnen für Darstellung
+  const x=sc.x, y=sc.y;
+
+  // Nächsten Node in Weltkoords suchen, dann in Bildschirmkoords projizieren
+  let closest=null, closestDist=CONNECT_R;
   nodes.forEach(n=>{
     if (n.fading||n.dead) return;
-    const dx=n.x-x, dy=n.y-y, d=Math.sqrt(dx*dx+dy*dy);
-    if (d<closestDist) { closestDist=d; closest=n; } // Nächsten Node merken
+    const dx=n.x-wx, dy=n.y-wy, d=Math.sqrt(dx*dx+dy*dy); // Abstand in Weltkoords
+    if (d<closestDist) { closestDist=d; closest=n; }
   });
-  if (closest) {                     // Vorschaulinie zum nächsten Node zeichnen
+  if (closest) {
+    const ns=worldToScreen(closest.x,closest.y); // Node auf Bildschirm projizieren
     ctx.save();
-    ctx.strokeStyle=`rgba(${getAccentRGB()},${(1-closestDist/CONNECT_R)*0.28})`; // Stärker je näher
-    ctx.lineWidth=0.6; ctx.setLineDash([3,6]); // Gestrichelte grüne Vorschaulinie
-    ctx.beginPath(); ctx.moveTo(x,y); ctx.lineTo(closest.x,closest.y); ctx.stroke();
+    ctx.strokeStyle=`rgba(${getAccentRGB()},${(1-closestDist/CONNECT_R)*0.28})`;
+    ctx.lineWidth=0.6; ctx.setLineDash([3,6]);
+    ctx.beginPath(); ctx.moveTo(x,y); ctx.lineTo(ns.x,ns.y); ctx.stroke(); // Linie in Bildschirmkoords
     ctx.setLineDash([]); ctx.restore();
   }
   ctx.save();
@@ -1376,11 +1666,13 @@ canvas.addEventListener('click',e=>{
     firstClick=true;
     hint.classList.add('fade');      // Ersten Hinweis ausblenden
     setTimeout(()=>hint2.classList.add('show'),2000); // Nach 2 Sekunden zweiten Hinweis einblenden
+    initAmbience();                  // Ambient-Audio starten (erst nach Nutzerinteraktion erlaubt)
   }
-  const node=new Node(e.clientX,e.clientY,nodeCount++); // Neuen Node an Klickposition erstellen
+  const wPos=screenToWorld(e.clientX,e.clientY);        // Bildschirmklick → Weltkoordinaten
+  const node=new Node(wPos.x,wPos.y,nodeCount++);        // Node in Weltkoordinaten erstellen
   const nearby=findNearby(node);     // Nächsten Node in Reichweite suchen (vor dem Hinzufügen!)
   nodes.push(node);                  // Node zur globalen Liste hinzufügen
-  addRipple(e.clientX,e.clientY);    // Klick-Welle erzeugen
+  addRipple(wPos.x,wPos.y);          // Klick-Welle in Weltkoordinaten erzeugen
   nearby.forEach(other=>{            // Für jeden gefundenen Nachbar-Node:
     if (!connectionExists(node,other)) // Wenn noch keine Verbindung existiert:
       connections.push(new Connection(node,other)); // Neue Verbindung erstellen
@@ -1402,7 +1694,7 @@ canvas.addEventListener('dblclick',()=>{
   stats.textContent='';             // Statistik löschen
 });
 
-canvas.addEventListener('mousemove',  e =>{ mouse.x=e.clientX; mouse.y=e.clientY; }); // Mausposition verfolgen
+canvas.addEventListener('mousemove',  e =>{ const w=screenToWorld(e.clientX,e.clientY); mouse.x=w.x; mouse.y=w.y; }); // Mausposition in Weltkoords verfolgen
 canvas.addEventListener('mouseleave', ()=>{ mouse.x=-9999; mouse.y=-9999; });          // Maus außerhalb: Cursor verstecken
 
 
@@ -1432,6 +1724,14 @@ function loop() {
   particles.forEach(p=>p.update());   // Partikel aktualisieren
   updateRipples();                    // Ripples aktualisieren
   updateWind();                       // Wind-Winkel für diesen Frame berechnen
+  updateZoom();                       // Zoom-Level langsam verändern
+  updateAmbience();                   // Wind-Audio live an windSway anpassen
+
+  // ── Welt-Transform anwenden: alles wird um die Bildschirmmitte skaliert ──
+  ctx.save();
+  ctx.translate(W/2, H/2);           // Bildschirmmitte als Ankerpunkt
+  ctx.scale(worldScale, worldScale);  // Zoom anwenden
+  ctx.translate(-W/2, -H/2);         // Zurücktranslatieren
 
   connections.forEach(c=>c.draw());   // Verbindungen + Pflanzen zeichnen (im Hintergrund)
 
@@ -1444,32 +1744,41 @@ function loop() {
   butterflies.forEach(b=>b.draw());   // Schmetterlinge über den Pflanzen zeichnen
 
   // ── Autonomes Wachstum (Frühling/Sommer) ──
-  // Im Frühling alle ~25s, im Sommer alle ~15s sprießt eine neue Pflanze an einer Blattspitze
   if (seasonIndex < 2 && tips.length > 0) {
     const growChance = seasonIndex === 0 ? 0.00006 : 0.0001; // Sommer häufiger als Frühling
     if (Math.random() < growChance) {
       const t   = tips[Math.floor(Math.random()*tips.length)]; // Zufällige Blattspitze als Ursprung
       const ang = (Math.random()-0.5) * Math.PI;               // Zufällige Richtung
       if (connections.length > 0) {
-        const c = connections[Math.floor(Math.random()*connections.length)]; // Zufällige Verbindung
-        if (!c.fading && !c.dead) c.plants.push(makePlant(t.x, t.y, ang));  // Neue Pflanze anhängen
+        const c = connections[Math.floor(Math.random()*connections.length)];
+        if (!c.fading && !c.dead) c.plants.push(makePlant(t.x, t.y, ang));
       }
     }
   }
 
   // ── Fallende Blätter (Herbst/Winter) ──
-  fallingLeaves = fallingLeaves.filter(l => !l.dead); // Tote Blätter entfernen
-  fallingLeaves.forEach(l => { l.update(); l.draw(); }); // Blätter aktualisieren und zeichnen
-
-  // ── Schnee (nur Winter) ──
-  manageSnow();                       // Schneeflocken verwalten und aktualisieren
-  snowflakes.forEach(s => s.draw());  // Schneeflocken ganz oben zeichnen (über allem)
+  fallingLeaves = fallingLeaves.filter(l => !l.dead);
+  fallingLeaves.forEach(l => { l.update(); l.draw(); });
 
   particles.forEach(p=>p.draw());     // Partikel über den Pflanzen zeichnen
   nodes.forEach(n=>n.draw());         // Nodes ganz oben zeichnen (immer sichtbar)
   drawRipples();                      // Klick-Wellen über allem zeichnen
 
-  if (mouse.x>-9000) drawCursor(mouse.x,mouse.y); // Cursor zeichnen wenn Maus auf Canvas
+  ctx.restore();                      // Welt-Transform zurücksetzen
+
+  // ── Bildschirmraum (kein Zoom) ──
+  manageSnow();                       // Schnee in Bildschirmkoords verwalten
+  snowflakes.forEach(s => s.draw());  // Schnee liegt über allem, ohne Zoom
+
+  if (mouse.x>-9000) drawCursor(mouse.x,mouse.y); // Cursor in Weltkoords übergeben (wird intern projiziert)
+
+  // Schwarzer Überblend-Schleier für den nahtlosen Zoom-Reset
+  if (fadeAlpha > 0) {
+    ctx.save();
+    ctx.fillStyle = `rgba(0,0,0,${fadeAlpha})`; // Schwarz mit aktuellem Fade-Wert
+    ctx.fillRect(0,0,W,H);                       // Gesamten Canvas überdecken
+    ctx.restore();
+  }
 
   requestAnimationFrame(loop);        // Browser: ruf loop() beim nächsten Frame erneut auf
 }
