@@ -224,18 +224,25 @@ const PLANT_SOUNDS = {
 // ════════════════════════════════════════════
 // AMBIENT AUDIO
 // Zwei dauerhafte Klangschichten:
-// 1) Hintergrund-Drone: warme überlagerte
-//    Sinuswellen, sehr leise, immer präsent.
-// 2) Wind-Rauschen: gefiltertes weißes Rauschen,
-//    Lautstärke und Klangfarbe reagieren live
-//    auf windSway. Beide Schichten werden erst
-//    beim ersten Klick gestartet (Browser-Regel).
+// 1) Luft-Textur: gefiltertes, bewegtes Rauschen –
+//    leicht und natürlich, der eigentliche Teppich.
+// 2) Hauchzartes hohes Glühen aus zwei Sinustönen.
+// Dazu sparsame Zufallstöne (Pentatonik). Alles wird
+// mit der Dichte der Welt etwas heller (Szene-Kopplung).
+// Start erst beim ersten Klick (Browser-Autoplay-Regel).
+// Taste M mutet.
 // ════════════════════════════════════════════
 
 let ambienceReady  = false;         // Wurde die Ambient-Schicht schon gestartet?
-let windGainNode   = null;          // Lautstärke-Node des Wind-Rauschens
-let windFilterNode = null;          // Filter-Node des Wind-Rauschens
-let droneMaster    = null;          // Master-Gain des Hintergrund-Drones
+let ambientMaster  = null;          // Master-Gain für das gesamte Klangbett – auch Mute-Punkt
+let airFilter      = null;          // Bandpass der Luft-Textur (wird langsam moduliert → „bewegte Luft")
+let glowVoices     = [];            // Referenzen auf die zwei Glüh-Stimmen
+let ambientMuted   = false;         // Ist das Klangbett per Taste M stummgeschaltet?
+let chimeTimer     = null;          // Timeout-Referenz für den nächsten Zufallston
+
+const GLOW_FREQS = [440.00, 659.25];                 // A4 + E5 – hohe, offene Quinte (luftig, nicht schwer)
+const GLOW_GAINS = [0.022,  0.016];                  // Sehr leise; schwellen durch den LFO fast ganz weg
+const CHIME_FREQS= [261.63, 293.66, 329.63, 392.00, 440.00, 523.25, 587.33, 659.25]; // C4 D4 E4 G4 A4 C5 D5 E5 – Pentatonik, höher & leichter
 
 function initAmbience() {
   if (ambienceReady) return;        // Nur einmal starten
@@ -243,75 +250,135 @@ function initAmbience() {
   try {
     const ac = getAudio();
 
-    // ── Hintergrund-Drone ──
-    // Drei Sinuswellen in natürlichem Abstand (Quinte + Oktave) leicht verstimmt
-    droneMaster = ac.createGain();
-    droneMaster.gain.setValueAtTime(0, ac.currentTime);                     // Startet stumm
-    droneMaster.gain.linearRampToValueAtTime(0.055, ac.currentTime + 4.0);  // Blendet in 4s ein
-    droneMaster.connect(ac.destination);
+    // ── Master ──
+    ambientMaster = ac.createGain();                                          // Gesamtlautstärke (auch Mute-Punkt)
+    ambientMaster.gain.setValueAtTime(0, ac.currentTime);                     // Stumm starten (kein Knacken)
+    ambientMaster.gain.linearRampToValueAtTime(0.7, ac.currentTime + 5.0);    // Über 5s sehr sanft einblenden
+    ambientMaster.connect(ac.destination);                                    // Master → Lautsprecher
 
-    [55, 82.4, 110].forEach((freq, i) => {          // A1, E2, A2 – ein ruhiger A-Moll-Klang
-      const osc    = ac.createOscillator();
-      const gain   = ac.createGain();
-      const filter = ac.createBiquadFilter();
+    // ── Luft-Textur ──
+    // Leises Rauschen durch einen Bandpass → klingt wie sanfte, bewegte Luft,
+    // nicht wie ein Ton. Das ist die natürliche, leichte Grundschicht.
+    const airBuf  = ac.createBuffer(1, ac.sampleRate * 4, ac.sampleRate);     // 4s Rauschpuffer (wird geloopt)
+    const airData = airBuf.getChannelData(0);
+    let last = 0;                                                             // Vorheriger Wert (für sanfte Glättung)
+    for (let i = 0; i < airData.length; i++) {                               // Puffer mit „rosa-artigem" Rauschen füllen
+      const w = Math.random()*2 - 1;                                          // Weißes Rauschen
+      last    = (last + 0.02 * w) / 1.02;                                     // Einfacher Tiefpass → weicher, weniger zischig
+      airData[i] = last * 3.0;                                                // Pegel wieder anheben
+    }
+    const airSource = ac.createBufferSource();
+    airSource.buffer = airBuf;
+    airSource.loop   = true;                                                  // Endlos loopen
 
-      osc.type            = 'sine';                 // Sinuswelle: weichster, reinster Klang
-      osc.frequency.value = freq + (Math.random()-0.5) * 1.5; // Leichte Verstimmung für Wärme
-      filter.type         = 'lowpass';              // Nur tiefe Frequenzen durchlassen
-      filter.frequency.value = 180;                 // Alles über 180Hz abschneiden → sehr warm
-      gain.gain.value     = [0.5, 0.3, 0.2][i];    // Tiefste Frequenz am lautesten
+    airFilter = ac.createBiquadFilter();             // Bandpass: lässt nur einen luftigen Frequenzbereich durch
+    airFilter.type            = 'bandpass';
+    airFilter.frequency.value = 700;                 // Mittenfrequenz (wird vom LFO + Szene-Kopplung bewegt)
+    airFilter.Q.value         = 0.6;                 // Breiter, weicher Durchlass (kein Pfeifen)
 
-      osc.connect(filter);
-      filter.connect(gain);
-      gain.connect(droneMaster);
-      osc.start();                                  // Dauerhaft laufen lassen
+    const airGain = ac.createGain();
+    airGain.gain.value = 0.018;                      // Sehr leise – nur als Hauch von Luft präsent
+
+    airSource.connect(airFilter);                    // Rauschen → Bandpass
+    airFilter.connect(airGain);                      // → Lautstärke
+    airGain.connect(ambientMaster);                  // → Master
+    airSource.start();                               // Läuft dauerhaft
+
+    // Filter-LFO: bewegt die Mittenfrequenz langsam → die Luft „weht", statt statisch zu zischen
+    const fLfo     = ac.createOscillator();
+    const fLfoGain = ac.createGain();
+    fLfo.type            = 'sine';
+    fLfo.frequency.value = 0.04;                     // ~25s pro Zyklus
+    fLfoGain.gain.value  = 200;                      // Mittenfrequenz wandert ±200Hz
+    fLfo.connect(fLfoGain);
+    fLfoGain.connect(airFilter.frequency);           // Addiert sich auf airFilter.frequency
+    fLfo.start();
+
+    // ── Hauchzartes hohes Glühen ──
+    // Zwei reine Sinustöne (offene Quinte, hoch), die durch einen tiefen LFO
+    // fast ganz weg- und wieder anschwellen. Kein Dauerton, nur ein Schimmer.
+    glowVoices = GLOW_FREQS.map((freq, i) => {
+      const osc  = ac.createOscillator();            // Reiner Sinus (weichster Klang)
+      const gain = ac.createGain();                  // Eigene, atmende Lautstärke
+
+      osc.type            = 'sine';
+      osc.frequency.value = freq;                    // Hohe Tonhöhe → leicht und luftig
+
+      const lfo     = ac.createOscillator();         // Breathing-LFO
+      const lfoGain = ac.createGain();
+      lfo.type            = 'sine';
+      lfo.frequency.value = 0.025 + Math.random()*0.03; // Sehr langsam, je Stimme leicht anders
+      lfoGain.gain.value  = GLOW_GAINS[i] * 0.85;    // Tiefe Auslenkung: schwillt fast bis auf null ab
+      lfo.connect(lfoGain);
+      lfoGain.connect(gain.gain);                    // LFO addiert sich auf den Grundwert
+      gain.gain.value     = GLOW_GAINS[i];           // Mittlere (sehr leise) Lautstärke
+
+      osc.connect(gain);                             // Stimme → Lautstärke
+      gain.connect(ambientMaster);                   // → Master (reiner Sinus braucht keinen Filter)
+      osc.start(); lfo.start();
+      return { osc, gain };
     });
 
-    // ── Wind-Rauschen ──
-    // Weißes Rauschen (zufällige Samples) durch einen Bandpass-Filter gejagt
-    const bufSize   = ac.sampleRate * 4;            // 4 Sekunden Rauschpuffer (wird geloopt)
-    const noiseBuf  = ac.createBuffer(1, bufSize, ac.sampleRate);
-    const noiseData = noiseBuf.getChannelData(0);
-    for (let i = 0; i < bufSize; i++) noiseData[i] = Math.random()*2 - 1; // Zufällige Werte = weißes Rauschen
-
-    const noiseSource  = ac.createBufferSource();
-    noiseSource.buffer = noiseBuf;
-    noiseSource.loop   = true;                      // Endlos loopen
-
-    windFilterNode = ac.createBiquadFilter();
-    windFilterNode.type            = 'lowpass';     // Lowpass statt Bandpass → viel weicher, kein Pfeifen
-    windFilterNode.frequency.value = 200;           // Nur sehr tiefe Frequenzen durchlassen
-    windFilterNode.Q.value         = 0.3;           // Breiter, diffuser Durchlass
-
-    windGainNode = ac.createGain();
-    windGainNode.gain.value = 0;                    // Startet stumm, wird durch updateAmbience gesteuert
-
-    noiseSource.connect(windFilterNode);
-    windFilterNode.connect(windGainNode);
-    windGainNode.connect(ac.destination);
-    noiseSource.start();                            // Rauschen läuft permanent, nur Lautstärke ändert sich
+    scheduleChime();                                 // Zufallston-Kette starten (plant sich selbst immer weiter)
 
   } catch(e) {}                                     // Fehler ignorieren falls Audio gesperrt
 }
 
-function updateAmbience() {
-  if (!ambienceReady || !windGainNode) return;
+// Spielt einen einzelnen, weichen Pentatonik-Ton (Glöckchen-artig)
+function playChime() {
   try {
-    const ac       = getAudio();
-    const strength = Math.abs(windSway) * 85;       // windSway (sehr kleine Zahl) → hörbare Stärke (0–~5)
-    const clamp    = Math.min(1, strength);          // Auf 0–1 begrenzen
+    const ac   = getAudio();
+    const freq = CHIME_FREQS[Math.floor(Math.random()*CHIME_FREQS.length)]; // Zufälligen Pentatonik-Ton wählen
+    const osc  = ac.createOscillator();             // Klangerzeuger
+    const gain = ac.createGain();                   // Hüllkurve (Ein-/Ausblenden)
+    const pan  = ac.createStereoPanner ? ac.createStereoPanner() : null; // Stereo-Position (falls Browser unterstützt)
 
-    // Windlautstärke: leise bei schwachem Wind, lauter bei Böen
-    const targetVol  = clamp * 0.008;                                      // Sehr leise – kaum wahrnehmbar
-    windGainNode.gain.setTargetAtTime(targetVol, ac.currentTime, 1.2);     // Sehr langsamer Übergang → kein Pumpen
+    osc.type            = 'sine';                   // Reiner, glockiger Klang
+    osc.frequency.value = freq;                     // Tonhöhe
 
-    const targetFreq = 150 + clamp * 100;                                  // 150–250Hz – nur tiefes, ruhiges Rauschen
-    windFilterNode.frequency.setTargetAtTime(targetFreq, ac.currentTime, 1.2);
+    const t = ac.currentTime;
+    gain.gain.setValueAtTime(0, t);                          // Bei 0 beginnen
+    gain.gain.linearRampToValueAtTime(0.032, t + 0.5);       // Weicher, leiser Attack – zart statt präsent
+    gain.gain.exponentialRampToValueAtTime(0.0006, t + 5.0); // Langer, sanfter Ausklang (5s)
 
-    // Drone-Lautstärke: im Winter etwas leiser (kälte, Stille)
-    if (droneMaster) {
-      const droneVol = seasonIndex === 3 ? 0.03 : 0.055; // Winter: gedämpfter Drone
-      droneMaster.gain.setTargetAtTime(droneVol, ac.currentTime, 2.0); // Sehr langsamer Übergang
+    osc.connect(gain);                              // Oszillator → Hüllkurve
+    if (pan) {                                      // Falls Stereo-Panner vorhanden:
+      pan.pan.value = (Math.random()*2 - 1) * 0.6;  // Zufällig leicht nach links/rechts
+      gain.connect(pan); pan.connect(ambientMaster);// → Panner → Master (wird mit-gemutet)
+    } else {
+      gain.connect(ambientMaster);                  // Ohne Panner direkt → Master
+    }
+    osc.start(t);                                   // Ton starten
+    osc.stop(t + 6.0);                              // Nach dem Ausklang stoppen (gibt Ressourcen frei)
+  } catch(e) {}
+}
+
+// Plant den nächsten Zufallston und ruft sich danach selbst wieder auf (Endlos-Kette)
+function scheduleChime() {
+  const density = Math.min(1, connections.length / 40); // Dichte der Welt 0 (leer) … 1 (dicht bewachsen)
+  const base    = 6800 - density * 3000;           // Mittlerer Abstand: 6,8s (leer) … 3,8s (voll) – nur leicht schneller
+  const wait    = base + Math.random()*3500;       // + bis zu 3,5s Zufall → nie regelmäßig/vorhersehbar
+  chimeTimer = setTimeout(() => {
+    if (ambienceReady && !ambientMuted) playChime();// Nur spielen wenn aktiv und nicht stumm
+    scheduleChime();                                // Nächsten Ton planen
+  }, wait);
+}
+
+function updateAmbience() {
+  if (!ambienceReady) return;                       // Erst nach dem Start aktiv
+  try {
+    const ac = getAudio();
+
+    // ── Klangbett: Lautstärke & Helligkeit der Luft an die Dichte der Welt koppeln ──
+    const density = Math.min(1, connections.length / 40);   // 0 (leer) … 1 (dicht bewachsen)
+    if (ambientMaster && !ambientMuted) {                   // Nicht gegen einen aktiven Mute ankämpfen
+      const winterDim = seasonIndex === 3 ? 0.7 : 1.0;      // Winter: alles etwas stiller/kälter
+      const targetVol = (0.65 + density * 0.15) * winterDim;// Wächst dezent mit der Welt mit (0.65 → 0.80)
+      ambientMaster.gain.setTargetAtTime(targetVol, ac.currentTime, 3.0); // Sehr träger Übergang
+    }
+    if (airFilter) {
+      const targetCut = 600 + density * 500;                // Dichter = luftiger/heller (Mittelwert 600 → 1100 Hz)
+      airFilter.frequency.setTargetAtTime(targetCut, ac.currentTime, 3.0); // LFO wandert weiterhin darum herum
     }
   } catch(e) {}
 }
@@ -1696,6 +1763,16 @@ canvas.addEventListener('dblclick',()=>{
 canvas.addEventListener('mousemove',  e =>{ const w=screenToWorld(e.clientX,e.clientY); mouse.x=w.x; mouse.y=w.y; }); // Mausposition in Weltkoords verfolgen
 canvas.addEventListener('mouseleave', ()=>{ mouse.x=-9999; mouse.y=-9999; });          // Maus außerhalb: Cursor verstecken
 
+window.addEventListener('keydown', e => {                  // Tastatur abhören
+  if (e.key === 'm' || e.key === 'M') {                    // Taste M = Klangbett stummschalten/anschalten
+    ambientMuted = !ambientMuted;                          // Zustand umschalten
+    if (ambientMaster) {                                   // Nur wenn das Audio schon läuft
+      const ac = getAudio();
+      ambientMaster.gain.setTargetAtTime(ambientMuted ? 0 : 0.7, ac.currentTime, 0.4); // Sanft aus-/einblenden
+    }
+  }
+});
+
 
 // ════════════════════════════════════════════
 // RENDER LOOP – das Herzstück der Animation
@@ -1724,7 +1801,7 @@ function loop() {
   updateRipples();                    // Ripples aktualisieren
   updateWind();                       // Wind-Winkel für diesen Frame berechnen
   updateZoom();                       // Zoom-Level langsam verändern
-  updateAmbience();                   // Wind-Audio live an windSway anpassen
+  updateAmbience();                   // Klangbett-Helligkeit/-Lautstärke an die Dichte der Welt anpassen
 
   // ── Welt-Transform anwenden: alles wird um die Bildschirmmitte skaliert ──
   ctx.save();
