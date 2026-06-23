@@ -6,6 +6,34 @@
   <title>where life takes shape</title>     <!-- Text der im Browser-Tab angezeigt wird -->
   <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&display=swap" rel="stylesheet"> <!-- Lädt die Schriftart "Space Mono" von Google Fonts -->
   <link rel="stylesheet" href="style.css"> <!-- Bindet die externe CSS-Datei ein (Styling) -->
+  <!-- NEU: Styling für den Kamera-Picker. Liegt hier in der index.html, damit style.css unangetastet bleibt -->
+  <style>
+    #cam-picker {                              /* Container für die Kamera-Liste */
+      position: fixed;                          /* Fest am Bildschirm, scrollt nicht mit */
+      bottom: 34px;                             /* Knapp über der "camera:"-Statuszeile (die sitzt bei 18px) */
+      left: 48px;                               /* Gleiche linke Kante wie Status und Titel */
+      display: none;                            /* Standardmäßig versteckt – erscheint nur bei mehreren Kameras */
+      font-family: 'Space Mono', monospace;     /* Gleiche Schrift wie der Rest der UI */
+      font-size: 9px;                           /* Bewusst klein und dezent */
+      letter-spacing: 0.3em;                    /* Weite Laufweite – passt zum Status-Look */
+      text-transform: uppercase;                /* Alles in Großbuchstaben */
+      z-index: 21;                              /* Über dem Canvas, über der Statuszeile */
+    }
+    #cam-picker .cam-item {                      /* Ein einzelner Kamera-Eintrag in der Liste */
+      color: rgba(255,255,255,0.25);            /* Dezentes Grau – unaufdringlich im Ruhezustand */
+      padding: 3px 0;                           /* Etwas vertikaler Abstand zwischen den Einträgen */
+      cursor: pointer;                          /* Mauszeiger zeigt: hier ist etwas klickbar */
+      pointer-events: auto;                     /* Klickbar machen, obwohl die UI sonst pointer-events:none hat */
+      transition: color 0.2s;                   /* Sanfter Farbübergang beim Hovern */
+      max-width: 240px;                         /* Lange Kameranamen nicht endlos breit werden lassen */
+      overflow: hidden;                         /* Überlauf abschneiden ... */
+      white-space: nowrap;                      /* ... auf einer Zeile halten ... */
+      text-overflow: ellipsis;                  /* ... und mit "…" kürzen */
+    }
+    #cam-picker .cam-item:hover { color: rgba(152,255,110,0.7); }  /* Beim Hovern dein Akzentgrün */
+    #cam-picker .cam-item.active { color: rgba(152,255,110,0.5); } /* Aktive Kamera dauerhaft grün markiert */
+    #cam-picker .cam-item.active::before { content: "› "; }        /* Kleiner Pfeil-Marker vor der aktiven Kamera */
+  </style>
 </head>
 <body>                               <!-- Sichtbarer Inhalt der Seite beginnt hier -->
 
@@ -21,6 +49,8 @@
   <div id="hint">— set points, grow connections —</div> <!-- Erster Hinweistext für den User -->
   <div id="hint2">double-click to clear</div>           <!-- Zweiter Hinweis, erscheint nach erstem Klick -->
   <div id="stats"></div>             <!-- Statistikanzeige – wird per JavaScript befüllt -->
+  <!-- NEU: Kamera-Picker. Liste wird per JavaScript befüllt, erscheint nur bei mehreren Kameras -->
+  <div id="cam-picker"></div>
   <!-- NEU: kleine Statusanzeige für die Kamera (passt sich farblich an, stört die Optik nicht) -->
   <div id="cam-status" style="position:fixed;bottom:18px;left:48px;font-family:'Space Mono',monospace;font-size:9px;letter-spacing:0.3em;text-transform:uppercase;color:rgba(255,255,255,0.25);pointer-events:none;z-index:20;">camera: off</div>
 </div>
@@ -28,7 +58,7 @@
 <script src="script.js"></script>    <!-- Bindet die externe JavaScript-Datei ein (Logik & Animation) -->
 
 <!-- ════════════════════════════════════════════════════════════════
-     NEU: Handtracking. Liegt komplett hier in der index.html.
+     Handtracking. Liegt komplett hier in der index.html.
      style.css und script.js bleiben unverändert.
      Es simuliert echte Maus-Ereignisse, daher reagiert script.js normal.
      ════════════════════════════════════════════════════════════════ -->
@@ -37,6 +67,11 @@ import { FilesetResolver, HandLandmarker } from "https://cdn.jsdelivr.net/npm/@m
 
 const canvas = document.getElementById("canvas");   // Dein Canvas holen – darauf werden die simulierten Maus-Events ausgelöst
 const status = document.getElementById("cam-status"); // Die neue Statusanzeige holen
+const picker = document.getElementById("cam-picker"); // Den Container für die Kamera-Liste holen
+
+let currentStream = null;                            // Aktiver Kamera-Stream (zum sauberen Schließen beim Wechsel)
+let currentDeviceId = null;                          // deviceId der gerade laufenden Kamera (zum Markieren in der Liste)
+let detectStarted = false;                           // Merker: läuft die Erkennungs-Schleife schon? (nicht doppelt starten)
 
 const video = document.createElement("video");       // Verstecktes Video-Element für den Kamera-Stream erstellen
 video.style.display = "none";                        // Video nicht anzeigen – wir nutzen nur die Bilddaten
@@ -90,17 +125,76 @@ async function setup() {
 }
 
 // ── 2. Kamera starten ────────────────────────────────────────────
+// Kleine Helfer, um die zuletzt gewählte Kamera zu merken (localStorage kann im Privat-Modus blockiert sein → try/catch)
+function saveCam(id) { try { localStorage.setItem("ig-camera", id); } catch (e) {} } // Gewählte deviceId speichern
+function loadCam()    { try { return localStorage.getItem("ig-camera"); } catch (e) { return null; } } // Gespeicherte deviceId lesen
+
+// Öffnet einen Kamera-Stream nach den gegebenen Vorgaben (constraints) und hängt ihn ins Video-Element
+async function openStream(constraints) {
+  if (currentStream) currentStream.getTracks().forEach(t => t.stop()); // Alten Stream sauber schließen (sonst bleibt die Kamera belegt)
+  const stream = await navigator.mediaDevices.getUserMedia(constraints); // Neuen Stream mit den Vorgaben holen
+  currentStream = stream;                            // Stream merken (für den nächsten Wechsel)
+  video.srcObject = stream;                          // Stream ins versteckte Video-Element stecken
+  await video.play();                                // Video starten (liefert ab jetzt Frames)
+  const track = stream.getVideoTracks()[0];          // Die tatsächlich gelieferte Videospur holen
+  currentDeviceId = track.getSettings().deviceId || null; // Echte deviceId der laufenden Kamera auslesen
+  status.textContent = "camera: on";                 // Statusanzeige: läuft
+  status.style.color = "rgba(152,255,110,0.5)";      // Status grün einfärben (dein Akzentgrün)
+  if (!detectStarted) { detectStarted = true; detect(); } // Erkennungs-Schleife genau EINMAL starten
+}
+
+// Markiert in der Liste, welche Kamera gerade aktiv ist
+function markActive(deviceId) {
+  picker.querySelectorAll(".cam-item").forEach(el =>  // Alle Einträge durchgehen ...
+    el.classList.toggle("active", el.dataset.id === deviceId) // ... und nur den passenden als "active" markieren
+  );
+}
+
+// Baut die klickbare Kamera-Liste auf – aber nur, wenn es mehr als eine Kamera gibt
+async function buildPicker() {
+  const devices = await navigator.mediaDevices.enumerateDevices(); // Alle Mediengeräte auflisten (Labels sind erst nach erteilter Erlaubnis lesbar)
+  const cams = devices.filter(d => d.kind === "videoinput");       // Nur die Kameras herausfiltern
+  if (cams.length <= 1) return;                       // Nur eine (oder keine) Kamera → kein Picker nötig
+
+  picker.innerHTML = "";                              // Liste leeren (falls neu aufgebaut)
+  picker.style.display = "block";                     // Picker sichtbar machen
+
+  cams.forEach((cam, i) => {                          // Für jede gefundene Kamera einen Eintrag bauen
+    const item = document.createElement("div");       // Neues Listen-Element erstellen
+    item.className = "cam-item";                       // CSS-Klasse für das Styling vergeben
+    item.dataset.id = cam.deviceId;                    // deviceId am Element hinterlegen (für markActive)
+    item.textContent = cam.label || ("camera " + (i + 1)); // Gerätename oder Fallback "camera 1/2/…"
+    if (cam.deviceId === currentDeviceId) item.classList.add("active"); // Aktuell laufende Kamera direkt markieren
+    item.onclick = async () => {                       // Beim Klick auf den Eintrag:
+      try {
+        await openStream({ video: { deviceId: { exact: cam.deviceId } } }); // Auf genau diese Kamera umschalten
+        saveCam(cam.deviceId);                          // Wahl merken (beim nächsten Laden wird sie bevorzugt)
+        markActive(cam.deviceId);                       // Markierung in der Liste aktualisieren
+      } catch (err) {                                   // Falls das Umschalten fehlschlägt:
+        status.textContent = "camera: error";          // Kurz Fehler anzeigen
+        status.style.color = "rgba(255,90,90,0.6)";     // Status rot einfärben
+      }
+    };
+    picker.appendChild(item);                          // Eintrag in die Liste einhängen
+  });
+}
+
 async function startCamera() {
+  const saved = loadCam();                            // Zuletzt gewählte Kamera (falls vorhanden)
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ video: true }); // Kamera-Erlaubnis anfragen und Stream holen
-    video.srcObject = stream;                        // Den Kamera-Stream ins Video-Element stecken
-    await video.play();                              // Video starten (liefert ab jetzt Frames)
-    status.textContent = "camera: on";               // Statusanzeige: läuft
-    status.style.color = "rgba(152,255,110,0.5)";    // Status grün einfärben (dein Akzentgrün)
-    detect();                                        // Erkennungs-Schleife beginnen
-  } catch (e) {                                      // Falls die Erlaubnis verweigert wird oder kein HTTPS vorliegt
-    status.textContent = "camera: denied";           // Fehler anzeigen
-    status.style.color = "rgba(255,90,90,0.6)";      // Status rot einfärben
+    if (saved) {                                       // Gibt es eine gespeicherte Kamera?
+      try {
+        await openStream({ video: { deviceId: { exact: saved } } }); // Versuchen, genau diese Kamera zu öffnen
+      } catch (e) {                                    // Gespeicherte Kamera existiert nicht mehr (z. B. anderes Gerät)?
+        await openStream({ video: true });             // Dann einfach die Standardkamera nehmen
+      }
+    } else {
+      await openStream({ video: true });               // Keine gespeicherte Wahl → Standardkamera
+    }
+    await buildPicker();                               // Liste aufbauen (nur sichtbar bei mehreren Kameras)
+  } catch (e) {                                        // Erlaubnis verweigert oder kein HTTPS:
+    status.textContent = "camera: denied";             // Fehler anzeigen
+    status.style.color = "rgba(255,90,90,0.6)";        // Status rot einfärben
   }
 }
 
