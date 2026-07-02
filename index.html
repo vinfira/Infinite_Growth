@@ -33,6 +33,21 @@
     #cam-picker .cam-item:hover { color: rgba(152,255,110,0.7); }  /* Beim Hovern dein Akzentgrün */
     #cam-picker .cam-item.active { color: rgba(152,255,110,0.5); } /* Aktive Kamera dauerhaft grün markiert */
     #cam-picker .cam-item.active::before { content: "› "; }        /* Kleiner Pfeil-Marker vor der aktiven Kamera */
+
+    /* NEU: Rückmeldung beim Setzen eines Punktes – der Ring zieht sich kurz zusammen */
+    @keyframes cursorPinch {                       /* Animation: von etwas größer als der Cursor nach innen kollabieren */
+      0%   { width: 24px; height: 24px; opacity: 0.6; } /* Start: 24px Durchmesser (Cursor-Ring ist 22px), gut sichtbar */
+      100% { width: 6px;  height: 6px;  opacity: 0;   } /* Ende: auf 6px zusammengezogen und komplett ausgeblendet */
+    }
+    .cursor-pulse {                                /* Der kurzlebige Rückmeldungs-Ring */
+      position: fixed;                             /* Fest im Viewport, folgt nicht dem Scrollen */
+      border: 1.2px solid rgba(255,255,255,0.6);   /* Weißer Ring – passt zum vorhandenen Cursor-Ring */
+      border-radius: 50%;                          /* Kreisform */
+      transform: translate(-50%, -50%);            /* Exakt auf den Klickpunkt zentrieren (bleibt beim Schrumpfen zentriert) */
+      pointer-events: none;                        /* Rein visuell – fängt keine Klicks ab */
+      z-index: 22;                                 /* Über dem Canvas und der übrigen UI */
+      animation: cursorPinch 0.24s ease-out forwards; /* Zusammenzieh-Animation, hält den Endzustand bis zum Entfernen */
+    }
   </style>
 </head>
 <body>                               <!-- Sichtbarer Inhalt der Seite beginnt hier -->
@@ -105,6 +120,21 @@ function fireMouse(type, x, y) {                     // type = "mousemove" oder 
   });
   canvas.dispatchEvent(ev);                          // Das Event auf dem Canvas auslösen – script.js reagiert wie auf eine echte Maus
 }
+
+// ── Cursor-Rückmeldung: kurzer Ring, der beim Setzen eines Punktes zusammenzieht ──
+let lastPulseMs = 0;                                 // Zeitpunkt der letzten Rückmeldung (spiegelt die 320ms-Klicksperre aus script.js)
+function spawnCursorPulse(px, py) {                  // px/py = Klickposition im Viewport (clientX/clientY)
+  const now = performance.now();                     // Aktuelle Zeit holen
+  if (now - lastPulseMs < 320) return;               // Wie script.js: zu schnelle Folgeklicks setzen keinen Node → also auch kein Puls
+  lastPulseMs = now;                                 // Zeitpunkt für die nächste Prüfung merken
+  const ring = document.createElement("div");        // Neues Ring-Element erzeugen
+  ring.className = "cursor-pulse";                    // CSS-Klasse mit der Zusammenzieh-Animation zuweisen
+  ring.style.left = px + "px";                       // Ring horizontal auf den Klickpunkt setzen
+  ring.style.top  = py + "px";                        // Ring vertikal auf den Klickpunkt setzen
+  document.body.appendChild(ring);                   // Ring einhängen – die Animation startet sofort
+  ring.addEventListener("animationend", () => ring.remove()); // Nach der Animation das Element sauber entfernen
+}
+canvas.addEventListener("click", e => spawnCursorPulse(e.clientX, e.clientY)); // Feuert bei echtem Mausklick UND beim simulierten Pinch-Klick
 
 // ── 1. Modell laden ──────────────────────────────────────────────
 async function setup() {
