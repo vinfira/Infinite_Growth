@@ -1732,7 +1732,7 @@ canvas.addEventListener('click',e=>{
     firstClick=true;
     hint.classList.add('fade');      // Ersten Hinweis ausblenden
     setTimeout(()=>hint2.classList.add('show'),2000); // Nach 2 Sekunden zweiten Hinweis einblenden
-    initAmbience();                  // Ambient-Audio starten (erst nach Nutzerinteraktion erlaubt)
+    initAmbience();               // AUS für Aufnahme – Klangbett (Luft/Glühen/Chimes) wird nicht gestartet; Interaktionstöne laufen weiter
   }
   const wPos=screenToWorld(e.clientX,e.clientY);        // Bildschirmklick → Weltkoordinaten
   const node=new Node(wPos.x,wPos.y,nodeCount++);        // Node in Weltkoordinaten erstellen
