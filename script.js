@@ -114,19 +114,9 @@ let fadeAlpha = 0;                  // Schwarzer Überblend-Schleier (0 = unsich
 let fadeDir   = 0;                  // 0 = kein Fade, 1 = ausblenden, -1 = einblenden
 
 function updateZoom() {
-  if (fadeDir === 0) {
-    worldScale = Math.max(MIN_SCALE, worldScale - ZOOM_OUT); // Kontinuierlich herauszoomen
-    if (worldScale <= MIN_SCALE) fadeDir = 1;                // Minimum erreicht → Ausblenden starten
-  } else if (fadeDir === 1) {
-    fadeAlpha = Math.min(1, fadeAlpha + 0.018);              // Schnell zu Schwarz einblenden
-    if (fadeAlpha >= 1) {
-      worldScale = MAX_SCALE;                                // Skala unsichtbar zurücksetzen
-      fadeDir = -1;                                          // Jetzt wieder aufhellen
-    }
-  } else {
-    fadeAlpha = Math.max(0, fadeAlpha - 0.012);              // Langsam aus Schwarz heraus
-    if (fadeAlpha <= 0) fadeDir = 0;                         // Loop beendet, normal weiterzoomen
-  }
+  // Automatischer Zoom entfernt: worldScale bleibt fest bei 1.0 (Identitäts-Transform),
+  // fadeAlpha bleibt 0 (kein schwarzer Reset-Schleier). Die Welt ist jetzt statisch.
+  return;                                                    // Sofort raus – keine Zoom-/Fade-Berechnung mehr
 }
 
 // Bildschirmkoordinaten → Weltkoordinaten (für Klicks und Maus)
